@@ -1,0 +1,589 @@
+/**
+ * Data ingestion, normalization, and deduplication for Setnik Web.
+ *
+ * Matches the Setnik app's exact backend architecture:
+ *  1. Supabase remote kill switches:
+ *       POST /rest/v1/rpc/get_flags             -> jambase_enabled, deezer_enabled
+ *       POST /rest/v1/rpc/fp_licensed_switches  -> jambase_listings
+ *  2. Supabase first-party shows (fp.shows + fp.venues, private schema accessed via RPC):
+ *       POST /rest/v1/rpc/fp_public_shows       body: { p_metro: "<metro>" }
+ *  3. Supabase community-submitted shows (public.submissions, anon SELECT via RLS):
+ *       GET  /rest/v1/submissions?select=*&metro=eq.<metro>&status=eq.live&starts_at=gt.<since>&order=starts_at.asc&limit=500
+ *  4. Public listings feeds (setnik-listings GitHub Release "listings", gated by jambase_enabled):
+ *       GET  https://github.com/<owner>/setnik-listings/releases/download/listings/shows-{metro}.json
+ *            (configured via LISTINGS_FEED_URL_TEMPLATE secret or variable)
+ *
+ * Gracefully handles missing env vars, empty tables, missing optional columns, or transient fetch errors
+ * without failing the build.
+ */
+import {
+  ALLOWED_GENRES_SET,
+  DEFAULT_LISTINGS_FEED_URL_TEMPLATE,
+  DEFAULT_METROS,
+  DEFAULT_WINDOW_DAYS,
+  getMetro,
+} from './config.mjs';
+import { addDaysYmd, localYmd, parseWallClock, safeWebUrl, toZonedIso } from './html.mjs';
+import { ensureOffsetIso } from './schema.mjs';
+
+const FETCH_TIMEOUT_MS = 15_000;
+
+/** Normalize a string for Setnik deduplication (mirrors the Setnik app/src/lib/listings/merge.ts). */
+export function normKeyPart(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/&/g, ' and ')
+    .replace(/^the /, '')
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+export function headlinerName(show) {
+  const sorted = [...(show.acts || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  return sorted[0]?.name || show.title || '';
+}
+
+/** Deduplication key: local date | normalized venue | normalized headliner. */
+export function dedupeKey(show) {
+  const date = String(show.startsAt || '').slice(0, 10);
+  return [date, normKeyPart(show.venue?.name), normKeyPart(headlinerName(show))].join('|');
+}
+
+function cleanGenres(rawGenres) {
+  if (!Array.isArray(rawGenres)) return [];
+  const out = [];
+  for (const g of rawGenres) {
+    const mapped = g === 'Club & Techno' ? 'Electronic' : g;
+    if (typeof mapped === 'string' && ALLOWED_GENRES_SET.has(mapped) && !out.includes(mapped)) {
+      out.push(mapped);
+    }
+  }
+  return out;
+}
+
+function cleanPrice(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  return {
+    ...(typeof raw.min === 'number' && Number.isFinite(raw.min) ? { min: raw.min } : {}),
+    ...(typeof raw.max === 'number' && Number.isFinite(raw.max) ? { max: raw.max } : {}),
+    ...(raw.isFree === true ? { isFree: true } : {}),
+    ...(raw.notaflof === true ? { notaflof: true } : {}),
+  };
+}
+
+/** Infer NYC borough/area from a city or address string when fp.shows lacks venue.area. */
+export function inferAreaFromCity(city, address, metroId) {
+  const hay = `${city || ''} ${address || ''}`.toLowerCase();
+  if (metroId === 'nyc') {
+    if (hay.includes('brooklyn')) return 'Brooklyn';
+    if (
+      hay.includes('queens') || hay.includes('ridgewood') || hay.includes('astoria') ||
+      hay.includes('long island city') || hay.includes('maspeth') || hay.includes('flushing')
+    ) return 'Queens';
+    if (hay.includes('bronx')) return 'Bronx';
+    if (hay.includes('staten island')) return 'Staten Island';
+    if (
+      hay.includes('jersey city') || hay.includes('hoboken') || hay.includes('newark') ||
+      hay.includes('montclair') || hay.includes('clifton') || hay.includes('rutherford') ||
+      /\b,?\s*nj\b/i.test(hay)
+    ) return 'North Jersey';
+    if (hay.includes('manhattan') || hay.includes('new york')) return 'Manhattan';
+    return 'New York City';
+  }
+  const firstCity = String(city || '').split(',')[0].trim();
+  return firstCity || getMetro(metroId).name;
+}
+
+/** Infer city ("Brooklyn, NY") from an address string ("1140 Myrtle Ave, Brooklyn, NY 11206"). */
+function inferCityFromAddress(address, metroId) {
+  if (typeof address === 'string') {
+    const m = /,\s*([^,]+),\s*([A-Za-z]{2})\b/.exec(address);
+    if (m) return `${m[1].trim()}, ${m[2].toUpperCase()}`;
+  }
+  const metro = getMetro(metroId);
+  return `${metro.name}, ${metro.state}`;
+}
+
+/** Normalize an act entry (preserving optional previewUrl / deezerArtistId if supplied). */
+function normalizeAct(rawAct, index) {
+  if (typeof rawAct === 'string') {
+    const name = rawAct.trim();
+    return name ? { name, order: index } : null;
+  }
+  if (!rawAct || typeof rawAct !== 'object') return null;
+  const name = typeof rawAct.name === 'string' ? rawAct.name.trim() : '';
+  if (!name) return null;
+  const previewUrl = safeWebUrl(rawAct.previewUrl ?? rawAct.preview_url ?? rawAct.links?.previewUrl);
+  const deezerArtistId = Number.isFinite(Number(rawAct.links?.deezerArtistId ?? rawAct.deezerArtistId ?? rawAct.deezer_artist_id))
+    ? Number(rawAct.links?.deezerArtistId ?? rawAct.deezerArtistId ?? rawAct.deezer_artist_id)
+    : undefined;
+  return {
+    name,
+    order: typeof rawAct.order === 'number' ? rawAct.order : index,
+    ...(previewUrl ? { previewUrl } : {}),
+    ...(deezerArtistId ? { links: { ...(rawAct.links || {}), deezerArtistId } } : rawAct.links ? { links: rawAct.links } : {}),
+  };
+}
+
+/**
+ * Convert a row returned by Supabase RPC `public.fp_public_shows(p_metro)` into a normalized Show.
+ * Matches the Setnik app/src/lib/fpMerge.ts `parseFpRows` & `fromRow`.
+ */
+export function normalizeFpRow(r, fallbackMetro) {
+  if (!r || typeof r !== 'object') return null;
+  if (r.pending === true) return null;
+  const id = typeof r.id === 'string' && r.id ? r.id : null;
+  const metro = typeof r.metro === 'string' && r.metro ? r.metro : fallbackMetro;
+  const venueName = typeof r.venueName === 'string' && r.venueName.trim() ? r.venueName.trim() : null;
+  const headliner = typeof r.headliner === 'string' && r.headliner.trim() ? r.headliner.trim() : null;
+  if (!id || !metro || !venueName || !headliner) return null;
+
+  const startsAt = ensureOffsetIso(
+    r.startsAt || (r.localDate ? `${r.localDate}T${(r.startLocal || '20:00').slice(0, 5)}:00` : null),
+    metro,
+  );
+  if (!startsAt) return null;
+
+  const doorsAt = r.doorsAt
+    ? ensureOffsetIso(r.doorsAt, metro)
+    : (r.localDate && r.doorsLocal ? ensureOffsetIso(`${r.localDate}T${r.doorsLocal.slice(0, 5)}:00`, metro) : null);
+
+  const addressMode = r.addressMode === 'registry' ? 'registry' : 'withheld';
+  const address = addressMode === 'registry' && typeof r.address === 'string' && r.address.trim() ? r.address.trim() : undefined;
+  const city = (typeof r.city === 'string' && r.city.trim()) ? r.city.trim() : inferCityFromAddress(address, metro);
+  const area = (typeof r.area === 'string' && r.area.trim()) ? r.area.trim() : inferAreaFromCity(city, address, metro);
+  const neighborhood = (typeof r.neighborhood === 'string' && r.neighborhood.trim()) ? r.neighborhood.trim() : area;
+
+  const supports = Array.isArray(r.supports) ? r.supports : [];
+  const acts = [
+    normalizeAct(
+      typeof r.previewUrl === 'string' || typeof r.preview_url === 'string'
+        ? { name: headliner, order: 0, previewUrl: r.previewUrl ?? r.preview_url }
+        : headliner,
+      0,
+    ),
+    ...supports.map((s, i) => normalizeAct(s, i + 1)),
+  ].filter(Boolean);
+
+  const imageUrl = safeWebUrl(r.imageUrl);
+  const sourceType = Array.isArray(r.sources) && r.sources.some((s) => s?.sourceType === 'venue_site') ? 'venue_site' : 'flyer';
+  const sourceUrl = Array.isArray(r.sources) ? safeWebUrl(r.sources.find((s) => s?.url)?.url) : null;
+
+  return {
+    id: `fp:${id}`,
+    title: typeof r.title === 'string' && r.title.trim() ? r.title.trim() : undefined,
+    startsAt,
+    ...(doorsAt ? { doorsAt } : {}),
+    timeTba: r.timeTba === true || !r.startLocal ? true : undefined,
+    venue: {
+      name: venueName,
+      neighborhood,
+      area,
+      metro,
+      city,
+      ...(address ? { address } : {}),
+      addressVisibility: address ? 'public' : 'on_request',
+      ...(typeof r.lat === 'number' && Number.isFinite(r.lat) ? { lat: r.lat } : {}),
+      ...(typeof r.lng === 'number' && Number.isFinite(r.lng) ? { lng: r.lng } : {}),
+    },
+    acts,
+    genres: cleanGenres(r.genres),
+    price: cleanPrice(r.price),
+    ...(imageUrl ? { flyerImages: [imageUrl] } : {}),
+    ticketUrl: safeWebUrl(r.ticketUrl) ?? undefined,
+    previewUrl: safeWebUrl(r.previewUrl ?? r.preview_url) ?? undefined,
+    status: r.status === 'cancelled' || r.status === 'moved' ? r.status : 'scheduled',
+    source: {
+      provider: sourceType,
+      url: sourceUrl || '',
+      fetchedAt: r.sources?.[0]?.fetchedAt || new Date().toISOString(),
+    },
+    priority: 3, // First-party Supabase data wins field conflicts
+  };
+}
+
+function offsetMinToString(min) {
+  const n = Math.trunc(Number(min) || 0);
+  const sign = n < 0 ? '-' : '+';
+  const a = Math.abs(n);
+  return `${sign}${String(Math.floor(a / 60)).padStart(2, '0')}:${String(a % 60).padStart(2, '0')}`;
+}
+
+/**
+ * Convert a row from Supabase `public.submissions` table into a normalized Show.
+ * Matches the Setnik app/src/lib/community/form.ts `rowToShow`.
+ */
+export function normalizeSubmissionRow(row) {
+  if (!row || typeof row !== 'object') return null;
+  if (row.status && row.status !== 'live') return null;
+  const id = typeof row.id === 'string' && row.id ? row.id : null;
+  const metro = typeof row.metro === 'string' && row.metro ? row.metro : null;
+  const venueName = typeof row.venue_name === 'string' && row.venue_name.trim() ? row.venue_name.trim() : null;
+  const venueArea = typeof row.venue_area === 'string' && row.venue_area.trim() ? row.venue_area.trim() : null;
+  if (!id || !metro || !venueName || !venueArea) return null;
+
+  const metroObj = getMetro(metro);
+  const acts = (Array.isArray(row.acts) ? row.acts : []).map((a, i) => normalizeAct(a, i)).filter(Boolean);
+  const title = typeof row.title === 'string' && row.title.trim() ? row.title.trim() : undefined;
+  if (acts.length === 0 && !title) return null;
+
+  const startsAt = row.starts_local && row.utc_offset_min != null
+    ? `${row.starts_local}:00${offsetMinToString(row.utc_offset_min)}`
+    : ensureOffsetIso(row.starts_local || row.starts_at, metro);
+  if (!startsAt) return null;
+
+  const address = typeof row.venue_address === 'string' && row.venue_address.trim() ? row.venue_address.trim() : undefined;
+  const area = metro === 'nyc' ? inferAreaFromCity(venueArea, address, metro) : venueArea;
+
+  return {
+    id: `cm-${id}`,
+    title,
+    startsAt,
+    venue: {
+      name: venueName,
+      neighborhood: venueArea,
+      area,
+      metro,
+      city: `${venueArea}, ${metroObj.state}`,
+      ...(address ? { address } : {}),
+      addressVisibility: address ? 'public' : 'neighborhood_only',
+    },
+    acts,
+    genres: cleanGenres(row.genres),
+    price: cleanPrice({
+      min: row.price_min != null ? Number(row.price_min) : undefined,
+      max: row.price_max != null ? Number(row.price_max) : undefined,
+      isFree: row.is_free === true,
+    }),
+    ticketUrl: safeWebUrl(row.ticket_url ?? row.source_url) ?? undefined,
+    previewUrl: safeWebUrl(row.preview_url) ?? undefined,
+    status: 'scheduled',
+    source: {
+      provider: 'community',
+      url: safeWebUrl(row.source_url) || '',
+      fetchedAt: row.created_at || new Date().toISOString(),
+    },
+    priority: 2,
+  };
+}
+
+/**
+ * Normalize a Show object from `setnik-listings` release feeds (`shows-{metro}.json`) or mock fixtures.
+ * Matches the Setnik app/src/lib/listings/validate.ts `cleanShow`.
+ */
+export function normalizeFeedShow(raw, fallbackMetro) {
+  if (!raw || typeof raw !== 'object') return null;
+  const id = typeof raw.id === 'string' && raw.id ? raw.id : null;
+  const v = raw.venue;
+  if (!id || !v || typeof v !== 'object' || typeof v.name !== 'string' || !v.name.trim()) return null;
+
+  const metro = (typeof v.metro === 'string' && v.metro) || fallbackMetro || 'nyc';
+  const startsAt = ensureOffsetIso(raw.startsAt, metro);
+  if (!startsAt) return null;
+
+  const acts = (Array.isArray(raw.acts) ? raw.acts : []).map((a, i) => normalizeAct(a, i)).filter(Boolean);
+  const title = typeof raw.title === 'string' && raw.title.trim() ? raw.title.trim() : undefined;
+  if (acts.length === 0 && !title) return null;
+
+  const doorsAt = raw.doorsAt ? ensureOffsetIso(raw.doorsAt, metro) : undefined;
+  const endsAt = raw.endsAt ? ensureOffsetIso(raw.endsAt, metro) : undefined;
+  const area = (typeof v.area === 'string' && v.area.trim()) || inferAreaFromCity(v.city, v.address, metro);
+  const neighborhood = (typeof v.neighborhood === 'string' && v.neighborhood.trim()) || area;
+  const city = (typeof v.city === 'string' && v.city.trim()) || inferCityFromAddress(v.address, metro);
+  const addressVisibility = ['public', 'neighborhood_only', 'on_request'].includes(v.addressVisibility)
+    ? v.addressVisibility
+    : 'public';
+  const address = typeof v.address === 'string' && v.address.trim() ? v.address.trim() : undefined;
+  const images = (Array.isArray(raw.flyerImages) ? raw.flyerImages : []).map(safeWebUrl).filter(Boolean);
+
+  return {
+    id,
+    title,
+    startsAt,
+    ...(doorsAt ? { doorsAt } : {}),
+    ...(endsAt ? { endsAt } : {}),
+    ...(raw.timeTba === true ? { timeTba: true } : {}),
+    venue: {
+      name: v.name.trim(),
+      neighborhood,
+      area,
+      metro,
+      city,
+      ...(address ? { address } : {}),
+      addressVisibility,
+      ...(typeof v.lat === 'number' && Number.isFinite(v.lat) ? { lat: v.lat } : {}),
+      ...(typeof v.lng === 'number' && Number.isFinite(v.lng) ? { lng: v.lng } : {}),
+    },
+    acts,
+    genres: cleanGenres(raw.genres),
+    price: cleanPrice(raw.price),
+    ...(images.length ? { flyerImages: images } : {}),
+    ...(typeof raw.flyerCredit === 'string' && raw.flyerCredit.trim() ? { flyerCredit: raw.flyerCredit.trim() } : {}),
+    ticketUrl: safeWebUrl(raw.ticketUrl) ?? undefined,
+    previewUrl: safeWebUrl(raw.previewUrl ?? raw.preview_url) ?? undefined,
+    status: raw.status === 'cancelled' || raw.status === 'moved' ? raw.status : 'scheduled',
+    source: {
+      provider: typeof raw.source?.provider === 'string' ? raw.source.provider : 'feed',
+      url: safeWebUrl(raw.source?.url) || '',
+      fetchedAt: typeof raw.source?.fetchedAt === 'string' ? raw.source.fetchedAt : '',
+    },
+    priority: 1,
+  };
+}
+
+/** Merge two records representing the same show, preferring higher-priority source while enriching missing fields. */
+function mergeTwoShows(existing, incoming) {
+  const [primary, secondary] = (incoming.priority ?? 1) > (existing.priority ?? 1)
+    ? [incoming, existing]
+    : [existing, incoming];
+
+  // Cancelled status always wins so we never advertise a cancelled show as scheduled.
+  const status = existing.status === 'cancelled' || incoming.status === 'cancelled'
+    ? 'cancelled'
+    : (primary.status !== 'scheduled' ? primary.status : secondary.status);
+
+  // Respect non-public address visibility if either record explicitly withheld a private/DIY address.
+  const address = primary.venue.addressVisibility === 'public' && primary.venue.address
+    ? primary.venue.address
+    : (secondary.venue.addressVisibility === 'public' && secondary.venue.address ? secondary.venue.address : undefined);
+  const addressVisibility = address ? 'public' : (primary.venue.addressVisibility || secondary.venue.addressVisibility);
+
+  // Merge acts while keeping richer lineup and preserving any previewUrl / deezerArtistId links.
+  const actList = primary.acts.length >= secondary.acts.length ? primary.acts : secondary.acts;
+  const secondaryByNorm = new Map(secondary.acts.map((a) => [normKeyPart(a.name), a]));
+  const primaryByNorm = new Map(primary.acts.map((a) => [normKeyPart(a.name), a]));
+  const acts = actList.map((a, idx) => {
+    const key = normKeyPart(a.name);
+    const other = primaryByNorm.get(key) === a ? secondaryByNorm.get(key) : primaryByNorm.get(key);
+    return {
+      ...other,
+      ...a,
+      order: idx,
+      ...(a.previewUrl || other?.previewUrl ? { previewUrl: a.previewUrl || other.previewUrl } : {}),
+    };
+  });
+
+  const genres = [...new Set([...(primary.genres || []), ...(secondary.genres || [])])];
+
+  return {
+    ...secondary,
+    ...primary,
+    status,
+    title: primary.title || secondary.title,
+    doorsAt: primary.doorsAt || secondary.doorsAt,
+    endsAt: primary.endsAt || secondary.endsAt,
+    timeTba: primary.timeTba && secondary.timeTba ? true : undefined,
+    venue: {
+      ...secondary.venue,
+      ...primary.venue,
+      neighborhood: primary.venue.neighborhood && primary.venue.neighborhood !== primary.venue.area
+        ? primary.venue.neighborhood
+        : (secondary.venue.neighborhood || primary.venue.neighborhood),
+      area: primary.venue.area || secondary.venue.area,
+      city: primary.venue.city || secondary.venue.city,
+      address,
+      addressVisibility,
+      lat: primary.venue.lat ?? secondary.venue.lat,
+      lng: primary.venue.lng ?? secondary.venue.lng,
+    },
+    acts,
+    genres,
+    price: Object.keys(primary.price || {}).length ? primary.price : (secondary.price || {}),
+    ticketUrl: primary.ticketUrl || secondary.ticketUrl,
+    previewUrl: primary.previewUrl || secondary.previewUrl,
+    flyerImages: primary.flyerImages?.length ? primary.flyerImages : secondary.flyerImages,
+  };
+}
+
+/** Deduplicate and sort shows chronologically, filtering to the [today, today + windowDays] window. */
+export function combineAndFilterShows(shows, { now = new Date(), windowDays = DEFAULT_WINDOW_DAYS } = {}) {
+  const byKey = new Map();
+  for (const s of shows) {
+    if (!s) continue;
+    const wall = parseWallClock(s.startsAt);
+    if (!wall) continue;
+    const metro = getMetro(s.venue.metro);
+    const today = localYmd(now, metro.tz);
+    const maxDate = addDaysYmd(today, windowDays);
+    if (wall.date < today || wall.date > maxDate) continue;
+
+    const k = dedupeKey(s);
+    const prev = byKey.get(k);
+    if (!prev) {
+      byKey.set(k, s);
+    } else {
+      byKey.set(k, mergeTwoShows(prev, s));
+    }
+  }
+
+  return [...byKey.values()].sort((a, b) => {
+    const tDiff = new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime();
+    if (tDiff !== 0) return tDiff;
+    return a.venue.name.localeCompare(b.venue.name) || headlinerName(a).localeCompare(headlinerName(b));
+  });
+}
+
+async function fetchJson(url, options = {}) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { ...options, signal: ctl.signal });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    }
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function supabaseHeaders(anonKey) {
+  return {
+    apikey: anonKey,
+    Authorization: `Bearer ${anonKey}`,
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  };
+}
+
+/** Read Setnik's remote kill switches from Supabase (defaults to all ON if unavailable). */
+export async function fetchKillSwitches(supabaseUrl, anonKey, log = console) {
+  const result = { jambaseEnabled: true, deezerEnabled: true };
+  if (!supabaseUrl || !anonKey) return result;
+  const base = supabaseUrl.replace(/\/+$/, '');
+  const headers = supabaseHeaders(anonKey);
+
+  try {
+    const flags = await fetchJson(`${base}/rest/v1/rpc/get_flags`, { method: 'POST', headers, body: '{}' });
+    if (Array.isArray(flags)) {
+      for (const row of flags) {
+        if (row?.key === 'jambase_enabled' && typeof row.enabled === 'boolean') result.jambaseEnabled = row.enabled;
+        if (row?.key === 'deezer_enabled' && typeof row.enabled === 'boolean') result.deezerEnabled = row.enabled;
+      }
+    }
+  } catch (err) {
+    log.warn?.(`[warn] Could not read get_flags() from Supabase (${err.message}); using defaults.`);
+  }
+
+  try {
+    const sw = await fetchJson(`${base}/rest/v1/rpc/fp_licensed_switches`, { method: 'POST', headers, body: '{}' });
+    if (sw && typeof sw === 'object' && sw.jambase_listings === false) {
+      result.jambaseEnabled = false;
+    }
+  } catch (err) {
+    log.warn?.(`[warn] Could not read fp_licensed_switches() from Supabase (${err.message}); using defaults.`);
+  }
+
+  return result;
+}
+
+/**
+ * Fetch upcoming shows across configured metros from Supabase (fp_public_shows RPC + public.submissions)
+ * and optionally public setnik-listings release feeds.
+ */
+export async function fetchLiveListings({
+  supabaseUrl = process.env.SUPABASE_URL,
+  supabaseAnonKey = process.env.SUPABASE_ANON_KEY,
+  metros = DEFAULT_METROS,
+  windowDays = DEFAULT_WINDOW_DAYS,
+  includeListingsFeed = process.env.INCLUDE_LISTINGS_FEED !== 'false',
+  feedUrlTemplate = process.env.LISTINGS_FEED_URL_TEMPLATE || DEFAULT_LISTINGS_FEED_URL_TEMPLATE,
+  now = new Date(),
+  log = console,
+} = {}) {
+  const warnings = [];
+  const attribution = new Set();
+  const rawShows = [];
+  const cleanSupabaseUrl = (supabaseUrl || '').trim().replace(/\/+$/, '');
+  const cleanAnonKey = (supabaseAnonKey || '').trim();
+
+  if (!cleanSupabaseUrl || !cleanAnonKey) {
+    const msg = 'SUPABASE_URL or SUPABASE_ANON_KEY is not set; skipping Supabase RPC/table queries.';
+    warnings.push(msg);
+    log.warn?.(`[warn] ${msg}`);
+  }
+
+  const flags = await fetchKillSwitches(cleanSupabaseUrl, cleanAnonKey, log);
+  const sinceIso = new Date(now.getTime() - 24 * 3600 * 1000).toISOString();
+
+  for (const metro of metros) {
+    // 1. Supabase first-party shows via public.fp_public_shows(p_metro) RPC
+    if (cleanSupabaseUrl && cleanAnonKey) {
+      try {
+        const rows = await fetchJson(`${cleanSupabaseUrl}/rest/v1/rpc/fp_public_shows`, {
+          method: 'POST',
+          headers: supabaseHeaders(cleanAnonKey),
+          body: JSON.stringify({ p_metro: metro }),
+        });
+        if (Array.isArray(rows)) {
+          for (const r of rows) {
+            const show = normalizeFpRow(r, metro);
+            if (show) rawShows.push(show);
+          }
+        }
+      } catch (err) {
+        const msg = `Supabase fp_public_shows(${metro}) failed: ${err.message}`;
+        warnings.push(msg);
+        log.warn?.(`[warn] ${msg}`);
+      }
+
+      // 2. Supabase community submissions via public.submissions (anon SELECT via RLS)
+      try {
+        const params = new URLSearchParams({
+          select: '*',
+          metro: `eq.${metro}`,
+          status: 'eq.live',
+          starts_at: `gt.${sinceIso}`,
+          order: 'starts_at.asc',
+          limit: '500',
+        });
+        const rows = await fetchJson(`${cleanSupabaseUrl}/rest/v1/submissions?${params}`, {
+          method: 'GET',
+          headers: supabaseHeaders(cleanAnonKey),
+        });
+        if (Array.isArray(rows)) {
+          for (const r of rows) {
+            const show = normalizeSubmissionRow(r);
+            if (show) rawShows.push(show);
+          }
+        }
+      } catch (err) {
+        const msg = `Supabase public.submissions(${metro}) failed: ${err.message}`;
+        warnings.push(msg);
+        log.warn?.(`[warn] ${msg}`);
+      }
+    }
+
+    // 3. Public setnik-listings release feed (gated by jambase_enabled kill switch)
+    if (includeListingsFeed && flags.jambaseEnabled && feedUrlTemplate) {
+      const feedUrl = feedUrlTemplate.replace('{metro}', encodeURIComponent(metro));
+      try {
+        const feed = await fetchJson(feedUrl, { headers: { Accept: 'application/json' } });
+        if (feed && Array.isArray(feed.shows)) {
+          for (const item of feed.shows) {
+            const show = normalizeFeedShow(item, metro);
+            if (show) rawShows.push(show);
+          }
+          if (Array.isArray(feed.attribution)) {
+            for (const line of feed.attribution) {
+              if (typeof line === 'string' && line.trim()) attribution.add(line.trim());
+            }
+          }
+        }
+      } catch (err) {
+        const msg = `Public listings feed (${metro}) unavailable: ${err.message}`;
+        warnings.push(msg);
+        log.warn?.(`[warn] ${msg}`);
+      }
+    }
+  }
+
+  const shows = combineAndFilterShows(rawShows, { now, windowDays });
+  return {
+    shows,
+    flags,
+    attribution: [...attribution],
+    warnings,
+  };
+}

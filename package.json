@@ -1,0 +1,16 @@
+{
+  "name": "setnik-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Zero-cost hyperlocal SEO static site generator and web-to-app funnel for Setnik.",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "node src/build.mjs",
+    "build:mock": "node src/build.mjs --mock",
+    "test": "node --test tests/*.test.mjs",
+    "preview": "npx --yes serve dist"
+  }
+}
