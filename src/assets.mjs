@@ -995,10 +995,86 @@ a.tag:hover {
 }
 
 .details-link {
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 12.5px;
+  font-weight: 600;
   text-decoration: none;
   white-space: nowrap;
+}
+
+.row-triggers {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.row-trigger-btn {
+  appearance: none;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 5px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.row-preview-btn {
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+
+.row-preview-btn:hover,
+.row-preview-btn.is-playing {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.row-preview-btn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.row-save-btn {
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+}
+
+.row-save-btn:hover {
+  border-color: var(--text);
+}
+
+.row-save-btn.is-saved {
+  background: var(--good-bg);
+  border-color: var(--good);
+  color: var(--good);
+}
+
+.row-feedback {
+  margin-top: 7px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.row-feedback[hidden] {
+  display: none;
+}
+
+.row-feedback a {
+  font-weight: 700;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.row-feedback a:hover {
+  text-decoration: underline;
 }
 
 /* Leaf Show Page */
@@ -1371,11 +1447,16 @@ body.has-android-bar {
   .show-card-action {
     grid-column: 2;
     flex-direction: row;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
+    gap: 8px;
     margin-top: 4px;
     padding-top: 8px;
     border-top: 1px solid var(--line);
+  }
+  .row-triggers {
+    justify-content: flex-start;
   }
   .hero-stats {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1449,6 +1530,7 @@ export function buildPlayerJs() {
   var explorer = document.querySelector('[data-home-explorer]');
   if (explorer) {
     var basePath = explorer.getAttribute('data-base-path') || '';
+    var deezerEnabled = explorer.getAttribute('data-deezer-enabled') !== '0';
     var allMetroIds = (explorer.getAttribute('data-metros') || '').split(',').filter(Boolean);
     var cityBtns = Array.prototype.slice.call(explorer.querySelectorAll('[data-city-btn]'));
     var whenBtns = Array.prototype.slice.call(explorer.querySelectorAll('[data-when-btn]'));
@@ -1639,6 +1721,11 @@ export function buildPlayerJs() {
         });
         main.appendChild(tagRow);
       }
+
+      var feedback = el('div', 'row-feedback');
+      feedback.setAttribute('data-row-feedback', '');
+      feedback.hidden = true;
+      main.appendChild(feedback);
       li.appendChild(main);
 
       var action = el('div', 'show-card-action');
@@ -1648,7 +1735,35 @@ export function buildPlayerJs() {
         else priceChip.textContent = s.pr;
         action.appendChild(priceChip);
       }
-      var det = el('a', 'details-link', 'Lineup & preview →');
+
+      var triggers = el('div', 'row-triggers');
+      var headName = s.hn || s.n || '';
+      if (s.pv || deezerEnabled) {
+        var prevBtn = el('button', 'row-trigger-btn row-preview-btn', '▶ Preview');
+        prevBtn.type = 'button';
+        prevBtn.setAttribute('data-row-preview', '');
+        prevBtn.setAttribute('data-act-name', headName);
+        prevBtn.setAttribute('data-deezer-id', s.dz || '');
+        prevBtn.setAttribute('data-preview-url', s.pv || '');
+        prevBtn.setAttribute('data-show-slug', s.sl || 'show');
+        prevBtn.setAttribute('aria-label', 'Play 30-second preview of ' + headName);
+        triggers.appendChild(prevBtn);
+      }
+
+      var saveBtn = el('button', 'row-trigger-btn row-save-btn', '+ Save');
+      saveBtn.type = 'button';
+      saveBtn.setAttribute('data-row-save', '');
+      saveBtn.setAttribute('data-event-name', s.n || '');
+      saveBtn.setAttribute('data-starts-at', s.sa || '');
+      saveBtn.setAttribute('data-venue-name', s.v || '');
+      saveBtn.setAttribute('data-venue-loc', s.vl || s.nb || '');
+      saveBtn.setAttribute('data-show-path', basePath + s.p);
+      saveBtn.setAttribute('data-show-slug', s.sl || 'show');
+      saveBtn.setAttribute('aria-label', 'Save ' + (s.n || 'show') + ' to calendar');
+      triggers.appendChild(saveBtn);
+      action.appendChild(triggers);
+
+      var det = el('a', 'details-link', 'Lineup & details →');
       det.href = basePath + s.p;
       action.appendChild(det);
       li.appendChild(action);
@@ -2011,6 +2126,212 @@ export function buildPlayerJs() {
         if (status) status.textContent = 'Preview unavailable right now — listen directly in the Setnik Android app.';
       }
     });
+  });
+
+  // In-list 30-second audio preview & calendar save triggers (works on SSR hubs + dynamic homepage rows)
+  var rowAudio = null;
+  var activeRowBtn = null;
+  var rowPreviewCache = {};
+
+  function buildPlayCtaUrl(campaign) {
+    var clean = String(campaign || 'list').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 64) || 'list';
+    return 'https://play.google.com/store/apps/details?id=com.setnik.app&referrer=' +
+      encodeURIComponent('utm_source=setnik_web&utm_medium=seo&utm_campaign=' + clean);
+  }
+
+  function setRowFeedback(card, prefixText, linkText, campaign) {
+    if (!card) return;
+    var fb = card.querySelector('[data-row-feedback]');
+    if (!fb) return;
+    fb.textContent = '';
+    if (prefixText) fb.appendChild(document.createTextNode(prefixText + ' '));
+    if (linkText) {
+      var a = document.createElement('a');
+      a.href = buildPlayCtaUrl(campaign);
+      a.rel = 'noopener';
+      a.textContent = linkText;
+      fb.appendChild(a);
+    }
+    fb.hidden = false;
+  }
+
+  function stopRowAudio() {
+    if (rowAudio && !rowAudio.paused) {
+      try { rowAudio.pause(); } catch (_) {}
+    }
+    if (activeRowBtn) {
+      activeRowBtn.classList.remove('is-playing');
+      activeRowBtn.textContent = '▶ Preview';
+      activeRowBtn = null;
+    }
+  }
+
+  // Pause in-list audio if any inline <audio> element starts playing
+  document.addEventListener('play', function (e) {
+    if (e.target && e.target.tagName === 'AUDIO') stopRowAudio();
+  }, true);
+
+  function escapeIcs(str) {
+    return String(str || '')
+      .replace(/\\\\/g, '\\\\\\\\')
+      .replace(/;/g, '\\\\;')
+      .replace(/,/g, '\\\\,')
+      .replace(/\\r?\\n/g, '\\\\n');
+  }
+
+  function toIcsUtc(dateObj) {
+    return dateObj.toISOString().replace(/[-:]/g, '').replace(/\\.\\d{3}Z$/, 'Z');
+  }
+
+  function downloadShowIcs(opts) {
+    var start = new Date(opts.startsAt || '');
+    if (Number.isNaN(start.getTime())) start = new Date();
+    var end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+    var now = new Date();
+    var loc = opts.venueLoc && opts.venueLoc.toLowerCase().indexOf(opts.venueName.toLowerCase()) === -1
+      ? (opts.venueName + ', ' + opts.venueLoc)
+      : (opts.venueLoc || opts.venueName);
+    var showUrl = opts.showPath ? (window.location.origin + opts.showPath) : window.location.href;
+    var lines = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Setnik//Live Music Listings//EN',
+      'CALSCALE:GREGORIAN',
+      'BEGIN:VEVENT',
+      'UID:' + (opts.slug || Date.now()) + '@setnikapp.github.io',
+      'DTSTAMP:' + toIcsUtc(now),
+      'DTSTART:' + toIcsUtc(start),
+      'DTEND:' + toIcsUtc(end),
+      'SUMMARY:' + escapeIcs(opts.eventName + ' @ ' + opts.venueName),
+      'LOCATION:' + escapeIcs(loc),
+      'URL:' + showUrl,
+      'DESCRIPTION:' + escapeIcs('Found via Setnik — never miss a set. Full lineup & band previews: ' + showUrl),
+      'END:VEVENT',
+      'END:VCALENDAR',
+      '',
+    ];
+    var blob = new Blob([lines.join('\\r\\n')], { type: 'text/calendar;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = (opts.slug || 'setnik-show') + '.ics';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+  }
+
+  document.addEventListener('click', async function (e) {
+    var prevBtn = e.target && e.target.closest ? e.target.closest('[data-row-preview]') : null;
+    if (prevBtn) {
+      var card = prevBtn.closest('.show-card');
+      var slug = prevBtn.getAttribute('data-show-slug') || 'list';
+
+      if (activeRowBtn === prevBtn && rowAudio && !rowAudio.paused) {
+        stopRowAudio();
+        return;
+      }
+
+      stopRowAudio();
+      document.querySelectorAll('audio').forEach(function (el) {
+        if (!el.paused) el.pause();
+      });
+
+      var directUrl = prevBtn.getAttribute('data-preview-url') || '';
+      var actName = prevBtn.getAttribute('data-act-name') || '';
+      var artistId = prevBtn.getAttribute('data-deezer-id') || '';
+      var cacheKey = directUrl || (artistId ? 'dz:' + artistId : 'act:' + normalizeName(actName));
+
+      prevBtn.disabled = true;
+      prevBtn.textContent = 'Loading…';
+
+      try {
+        var found = null;
+        if (directUrl) {
+          found = { title: '', artist: actName, previewUrl: directUrl };
+        } else if (Object.prototype.hasOwnProperty.call(rowPreviewCache, cacheKey)) {
+          found = rowPreviewCache[cacheKey];
+        } else {
+          found = await resolveDeezerPreview(actName, artistId);
+          rowPreviewCache[cacheKey] = found;
+        }
+
+        prevBtn.disabled = false;
+
+        if (!found || !found.previewUrl) {
+          prevBtn.textContent = 'No preview';
+          setRowFeedback(
+            card,
+            'No catalog clip for ' + (actName || 'this act') + ' ·',
+            'Swipe full local bills with auto-play in the Setnik app →',
+            'preview-' + slug
+          );
+          return;
+        }
+
+        if (!rowAudio) {
+          rowAudio = new Audio();
+          rowAudio.addEventListener('ended', function () {
+            if (activeRowBtn) {
+              activeRowBtn.classList.remove('is-playing');
+              activeRowBtn.textContent = '▶ Preview';
+              activeRowBtn = null;
+            }
+          });
+          rowAudio.addEventListener('error', function () {
+            stopRowAudio();
+          });
+        }
+
+        rowAudio.src = found.previewUrl;
+        activeRowBtn = prevBtn;
+        prevBtn.classList.add('is-playing');
+        prevBtn.textContent = '■ Stop';
+        await rowAudio.play();
+
+        var label = found.title
+          ? 'Playing “' + found.title + '” by ' + found.artist + ' (30s) ·'
+          : 'Playing 30s preview of ' + (found.artist || actName) + ' ·';
+        setRowFeedback(
+          card,
+          label,
+          'Swipe full bills with auto-play in the Setnik app →',
+          'preview-' + slug
+        );
+      } catch (_) {
+        prevBtn.disabled = false;
+        stopRowAudio();
+        setRowFeedback(
+          card,
+          'Preview unavailable in browser ·',
+          'Swipe full bills with auto-play in the Setnik app →',
+          'preview-' + slug
+        );
+      }
+      return;
+    }
+
+    var saveBtn = e.target && e.target.closest ? e.target.closest('[data-row-save]') : null;
+    if (saveBtn) {
+      var saveCard = saveBtn.closest('.show-card');
+      var saveSlug = saveBtn.getAttribute('data-show-slug') || 'save';
+      downloadShowIcs({
+        eventName: saveBtn.getAttribute('data-event-name') || 'Live Show',
+        startsAt: saveBtn.getAttribute('data-starts-at') || '',
+        venueName: saveBtn.getAttribute('data-venue-name') || '',
+        venueLoc: saveBtn.getAttribute('data-venue-loc') || '',
+        showPath: saveBtn.getAttribute('data-show-path') || '',
+        slug: saveSlug,
+      });
+      saveBtn.classList.add('is-saved');
+      saveBtn.textContent = '✓ Saved';
+      setRowFeedback(
+        saveCard,
+        'Calendar invite downloaded ·',
+        'Get one-tap saves & auto-playing previews in the Setnik app →',
+        'save-' + saveSlug
+      );
+    }
   });
 })();
 `;

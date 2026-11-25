@@ -230,16 +230,24 @@ function groupByDate(shows) {
 }
 
 function renderShowCard(show, ctx) {
-  const { basePath } = ctx;
+  const { basePath, flags } = ctx;
   const wall = parseWallClock(show.startsAt);
   const ymd = wall ? wall.date : '';
   const eventName = buildEventName(show);
   const acts = [...(show.acts || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const headAct = acts[0] || null;
+  const headliner = headAct?.name || eventName;
+  const directPreview = safeWebUrl(headAct?.previewUrl || show.previewUrl || null) || '';
+  const deezerId = headAct?.links?.deezerArtistId ? String(headAct.links.deezerArtistId) : '';
+  const canPreview = Boolean(directPreview) || flags?.deezerEnabled !== false;
   const supports = show.title
     ? acts.map((a) => a.name)
     : acts.slice(1).map((a) => a.name);
   const priceText = formatPrice(show.price);
   const timeText = formatShowTime(show);
+  const venueLoc = show.venue.addressVisibility === 'public' && show.venue.address
+    ? show.venue.address
+    : [show.venue.neighborhood || show.venue.area, show.venue.city].filter(Boolean).join(', ');
 
   return html`<li
     class="show-card"
@@ -275,12 +283,37 @@ function renderShowCard(show, ctx) {
       ${show.genres && show.genres.length ? html`<div class="tag-row">
         ${show.genres.map((g) => html`<a class="tag" href="${href(basePath, `/genres/${slugify(g)}/`)}">${g}</a>`)}
       </div>` : ''}
+      <div class="row-feedback" data-row-feedback hidden></div>
     </div>
     <div class="show-card-action">
       ${priceText
         ? html`<span class="price-chip">${show.price?.isFree ? html`<span class="badge badge-free">Free</span>` : priceText}</span>`
         : ''}
-      <a class="details-link" href="${href(basePath, show.pagePath)}">Lineup &amp; preview →</a>
+      <div class="row-triggers">
+        ${canPreview ? html`<button
+          type="button"
+          class="row-trigger-btn row-preview-btn"
+          data-row-preview
+          data-act-name="${headliner}"
+          data-deezer-id="${deezerId}"
+          data-preview-url="${directPreview}"
+          data-show-slug="${show.slug}"
+          aria-label="Play 30-second preview of ${headliner}"
+        >▶ Preview</button>` : ''}
+        <button
+          type="button"
+          class="row-trigger-btn row-save-btn"
+          data-row-save
+          data-event-name="${eventName}"
+          data-starts-at="${show.startsAt || ''}"
+          data-venue-name="${show.venue.name}"
+          data-venue-loc="${venueLoc}"
+          data-show-path="${href(basePath, show.pagePath)}"
+          data-show-slug="${show.slug}"
+          aria-label="Save ${eventName} to calendar"
+        >+ Save</button>
+      </div>
+      <a class="details-link" href="${href(basePath, show.pagePath)}">Lineup &amp; details →</a>
     </div>
   </li>`;
 }
@@ -331,7 +364,7 @@ function renderDateGroupedShows(shows, ctx, emptyMessage = 'No upcoming shows ar
 
 /** 1. Homepage (/) — Compact logo + tagline + Google Play badge, then immediate City & Date filtered listings */
 export function renderHomePage({ shows, homeShows = shows, homeMetros = [], weekendHubs, areaHubs, venues, genres }, ctx) {
-  const { siteUrl, basePath } = ctx;
+  const { siteUrl, basePath, flags } = ctx;
   const pageSlug = 'home';
   const defaultMetro = homeMetros[0] || null;
   const listings = homeShows && homeShows.length ? homeShows : shows.slice(0, 25);
@@ -354,6 +387,7 @@ export function renderHomePage({ shows, homeShows = shows, homeMetros = [], week
         class="home-explorer"
         data-home-explorer
         data-base-path="${basePath}"
+        data-deezer-enabled="${flags?.deezerEnabled !== false ? '1' : '0'}"
         data-metros="${homeMetros.map((m) => m.id).join(',')}"
         data-default-metro="${defaultMetro ? defaultMetro.id : 'all'}"
         data-default-when="this-week"
