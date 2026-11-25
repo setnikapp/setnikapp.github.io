@@ -1295,6 +1295,25 @@ a.tag:hover {
   color: var(--muted);
 }
 
+.hub-more-callout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 18px;
+  flex-wrap: wrap;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  margin: 14px 0 24px;
+}
+
+.hub-more-callout p {
+  margin: 0;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
 /* Footer */
 .site-footer {
   border-top: 1px solid var(--line);
@@ -1840,10 +1859,14 @@ export function buildPlayerJs() {
       var name = selectedCityBtn.getAttribute('data-metro-name') || '';
       var total = selectedCityBtn.getAttribute('data-metro-total') || '';
       var hubHref = selectedCityBtn.getAttribute('data-hub-href') || '/';
+      var tonightHref = selectedCityBtn.getAttribute('data-tonight-href') || hubHref;
       var wkHref = selectedCityBtn.getAttribute('data-weekend-href') || hubHref;
       if (activeCity === 'all') {
         expMore.href = hubHref;
         expMore.textContent = 'Browse all venues →';
+      } else if (activeWhen === 'tonight') {
+        expMore.href = tonightHref;
+        expMore.textContent = 'All ' + name + ' concerts tonight →';
       } else if (activeWhen === 'weekend') {
         expMore.href = wkHref;
         expMore.textContent = 'All ' + name + ' weekend shows →';

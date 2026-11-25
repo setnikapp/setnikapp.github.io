@@ -47,6 +47,7 @@ import {
   renderHomePage,
   renderNotFoundPage,
   renderShowLeafPage,
+  renderTonightHubPage,
   renderVenuePage,
   renderVenuesIndexPage,
   renderWeekendHubPage,
@@ -148,7 +149,8 @@ function buildCollections(routedShows, now) {
     showsByMetro.get(mId).push(s);
   }
 
-  // 1. Weekend hubs + date-bucket tags + full per-metro JSON payloads (ordered NYC, LA, Chicago first)
+  // 1. Tonight & Weekend hubs + date-bucket tags + full per-metro JSON payloads (ordered NYC, LA, Chicago first)
+  const tonightHubs = [];
   const weekendHubs = [];
   const homeMetros = [];
   const metroPayloads = new Map();
@@ -162,6 +164,8 @@ function buildCollections(routedShows, now) {
     const nextWeekEnd = addDaysYmd(today, 13);
     const range = getWeekendRange(now, metro.tz);
 
+    const tonightShows = [];
+    const tomorrowShows = [];
     const wkShows = [];
     const serializedShows = [];
 
@@ -178,6 +182,8 @@ function buildCollections(routedShows, now) {
       s.isWeekend = isWeekend;
       s.isThisWeek = isThisWeek;
       s.isNextWeek = isNextWeek;
+      if (isTonight) tonightShows.push(s);
+      if (isTomorrow) tomorrowShows.push(s);
       if (isWeekend) wkShows.push(s);
 
       const acts = [...(s.acts || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
@@ -238,15 +244,28 @@ function buildCollections(routedShows, now) {
       shows: serializedShows,
     });
 
-    const slug = `${metro.slug}-shows-this-weekend`;
+    const wkSlug = `${metro.slug}-shows-this-weekend`;
     weekendHubs.push({
-      slug,
-      path: `/${slug}/`,
+      slug: wkSlug,
+      path: `/${wkSlug}/`,
       metro,
       title: `${metro.shortName} Shows This Weekend`,
       shortTitle: `${metro.shortName} This Weekend`,
       dateRangeLabel: range.dateRangeLabel,
       shows: wkShows,
+    });
+
+    const tonightSlug = `${metro.slug}-concerts-tonight`;
+    tonightHubs.push({
+      slug: tonightSlug,
+      path: `/${tonightSlug}/`,
+      metro,
+      title: `${metro.shortName} Concerts Tonight`,
+      todayLabel: formatLongDate(today),
+      todayShort: formatShortDate(today),
+      weekendPath: `/${wkSlug}/`,
+      shows: tonightShows,
+      tomorrowShows,
     });
 
     homeMetros.push({
@@ -255,10 +274,12 @@ function buildCollections(routedShows, now) {
       name: metro.name,
       shortName: metro.shortName,
       hubPath: `/${metro.slug}-live-music/`,
-      weekendPath: `/${slug}/`,
+      tonightPath: `/${tonightSlug}/`,
+      weekendPath: `/${wkSlug}/`,
       totalCount: list.length,
     });
   }
+  tonightHubs.sort((a, b) => metroRank(a.metro.id) - metroRank(b.metro.id) || b.shows.length - a.shows.length);
   weekendHubs.sort((a, b) => metroRank(a.metro.id) - metroRank(b.metro.id) || b.shows.length - a.shows.length);
   homeMetros.sort((a, b) => metroRank(a.id) - metroRank(b.id) || b.totalCount - a.totalCount);
 
@@ -280,6 +301,7 @@ function buildCollections(routedShows, now) {
         label,
         metro,
         parentMetroPath: `/${metro.slug}-live-music/`,
+        tonightPath: `/${metro.slug}-concerts-tonight/`,
         weekendPath: `/${metro.slug}-shows-this-weekend/`,
         priority,
         shows: [...showsList],
@@ -319,17 +341,17 @@ function buildCollections(routedShows, now) {
       }
     }
 
-    // Boroughs / primary areas (require >= 2 shows outside NYC to avoid thin 1-show suburb pages across 10 metros)
+    // Boroughs / primary areas (require >= 2 shows across all metros to avoid thin 1-show suburb hubs)
     for (const [area, items] of byArea.entries()) {
-      if (mId !== 'nyc' && items.length < 2) continue;
+      if (items.length < 2) continue;
       const aSlug = slugify(area, 40);
       if (aSlug === metro.slug || aSlug === slugify(metro.name, 40)) continue;
       addAreaHub(aSlug, area, metro, items, 2);
     }
 
-    // Distinct cities (e.g. Jersey City in NYC metro; >= 2 shows elsewhere to prevent thin hubs)
+    // Distinct cities (e.g. Jersey City in NYC metro; require >= 2 shows everywhere to prevent thin 1-show suburbs)
     for (const [cityName, items] of byCity.entries()) {
-      if (mId !== 'nyc' && items.length < 2) continue;
+      if (items.length < 2) continue;
       const cSlug = slugify(cityName, 40);
       if (cSlug === metro.slug || cSlug === slugify(metro.name, 40) || cSlug === 'new-york') continue;
       if (areaMap.has(`${cSlug}-live-music`)) continue;
@@ -446,7 +468,7 @@ function buildCollections(routedShows, now) {
       a.genreName.localeCompare(b.genreName),
   );
 
-  return { weekendHubs, areaHubs, venues, genres, cityGenreHubs, homeMetros, homeShows, metroPayloads };
+  return { tonightHubs, weekendHubs, areaHubs, venues, genres, cityGenreHubs, homeMetros, homeShows, metroPayloads };
 }
 
 /** Build the complete static site into `outDir`. */
@@ -494,7 +516,7 @@ export async function buildSite({
   }
 
   const routedShows = assignRoutes(dataset.shows);
-  const { weekendHubs, areaHubs, venues, genres, cityGenreHubs, homeMetros, homeShows, metroPayloads } = buildCollections(routedShows, now);
+  const { tonightHubs, weekendHubs, areaHubs, venues, genres, cityGenreHubs, homeMetros, homeShows, metroPayloads } = buildCollections(routedShows, now);
 
   const ctx = {
     siteUrl,
@@ -533,10 +555,15 @@ export async function buildSite({
   );
   registerUrl('/', 1.0, 'daily');
 
-  // 2. Weekend hub pages
+  // 2. Weekend & Tonight hub pages
   for (const hub of weekendHubs) {
     const relatedAreas = areaHubs.filter((a) => a.metro.id === hub.metro.id);
     writeOut(outDir, path.join(hub.slug, 'index.html'), renderWeekendHubPage(hub, relatedAreas, ctx));
+    registerUrl(hub.path, PRIORITY_METROS.includes(hub.metro.id) ? 0.9 : 0.8, 'daily');
+  }
+  for (const hub of tonightHubs) {
+    const relatedAreas = areaHubs.filter((a) => a.metro.id === hub.metro.id);
+    writeOut(outDir, path.join(hub.slug, 'index.html'), renderTonightHubPage(hub, relatedAreas, ctx));
     registerUrl(hub.path, PRIORITY_METROS.includes(hub.metro.id) ? 0.9 : 0.8, 'daily');
   }
 
@@ -617,6 +644,7 @@ export async function buildSite({
     totalShows: routedShows.length,
     musicEventSchemaCount,
     skippedSchemaCount,
+    tonightHubCount: tonightHubs.length,
     weekendHubCount: weekendHubs.length,
     areaHubCount: areaHubs.length,
     venueCount: venues.length,
@@ -630,7 +658,7 @@ export async function buildSite({
   log.info?.(
     `[setnik-web] Built ${summary.totalUrlsInSitemap} pages into ${outDir} ` +
     `(${summary.totalShows} shows: ${summary.musicEventSchemaCount} with MusicEvent JSON-LD, ${summary.skippedSchemaCount} without street address; ` +
-    `${summary.weekendHubCount} weekend hubs, ${summary.areaHubCount} area hubs, ${summary.venueCount} venues, ${summary.genreCount} genres, ${summary.cityGenreHubCount} city×genre hubs).`,
+    `${summary.tonightHubCount} tonight hubs, ${summary.weekendHubCount} weekend hubs, ${summary.areaHubCount} area hubs, ${summary.venueCount} venues, ${summary.genreCount} genres, ${summary.cityGenreHubCount} city×genre hubs).`,
   );
 
   return summary;
