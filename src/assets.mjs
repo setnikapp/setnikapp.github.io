@@ -41,9 +41,9 @@ export function buildStylesCss() {
   --danger-bg: #F8E3E1;
   --font-display: 'Anton', Impact, 'Arial Narrow', sans-serif;
   --font-body: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --radius-sm: 2px;
-  --radius-md: 4px;
-  --radius-lg: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
   --shadow-card: none;
   --shadow-hover: none;
   --max-w: 980px;
@@ -314,8 +314,8 @@ h3 {
   background: var(--text);
   color: #FFFFFF;
   text-decoration: none;
-  padding: 6px 12px 6px 10px;
-  border-radius: 4px;
+  padding: 6px 13px 6px 10px;
+  border-radius: 8px;
   border: 1px solid #2A2A2A;
   transition: background-color 0.12s ease;
 }
@@ -357,16 +357,16 @@ h3 {
 .explorer-controls {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-bottom: 18px;
-  padding-bottom: 14px;
+  gap: 9px;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
   border-bottom: 1px solid var(--line);
 }
 
 .filter-row {
   display: flex;
   align-items: center;
-  gap: 6px 10px;
+  gap: 6px 12px;
   flex-wrap: wrap;
 }
 
@@ -382,7 +382,7 @@ h3 {
 .filter-pills {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -410,10 +410,10 @@ h3 {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
-  padding: 8px 10px;
+  padding: 9px 12px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 3px;
+  border-radius: 8px;
 }
 
 .custom-dates-bar[hidden] {
@@ -438,8 +438,8 @@ h3 {
   color: var(--text);
   background: var(--bg);
   border: 1px solid var(--line-strong);
-  border-radius: 3px;
-  padding: 4px 8px;
+  border-radius: 6px;
+  padding: 5px 9px;
 }
 
 .date-input:focus-visible {
@@ -612,7 +612,7 @@ h3 {
   font-size: 0.9rem;
   line-height: 1.25;
   padding: 10px 16px;
-  border-radius: 4px;
+  border-radius: 8px;
   border: 0;
   cursor: pointer;
   transition: background-color 0.12s ease;
@@ -634,7 +634,7 @@ h3 {
   font-weight: 600;
   font-size: 0.88rem;
   padding: 8px 14px;
-  border-radius: 4px;
+  border-radius: 8px;
   border: 1px solid var(--text);
   cursor: pointer;
   transition: background-color 0.12s ease, color 0.12s ease;
@@ -689,7 +689,7 @@ h3 {
   gap: 6px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 3px;
+  border-radius: var(--radius-md);
   padding: 12px 14px;
   text-decoration: none;
   color: var(--text);
@@ -697,7 +697,7 @@ h3 {
 }
 
 .hub-card:hover {
-  border-color: var(--text);
+  border-color: var(--accent);
   color: var(--text);
 }
 
@@ -720,38 +720,39 @@ h3 {
   color: var(--accent);
 }
 
-/* Filter bar on hubs */
+/* Filter buttons — Setnik brand-guide rounded squares */
 .filter-bar {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   flex-wrap: wrap;
-  margin: 0 0 16px;
+  margin: 0 0 18px;
 }
 
 .filter-pill {
   appearance: none;
-  background: transparent;
+  background: var(--surface);
   border: 1px solid var(--line-strong);
   color: var(--text);
   font-family: var(--font-body);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 3px;
+  padding: 6px 12px;
+  border-radius: 8px;
   cursor: pointer;
-  transition: background-color 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 
 .filter-pill:hover {
-  border-color: var(--text);
+  border-color: var(--accent);
+  color: var(--accent);
   background: var(--surface);
 }
 
 .filter-pill[aria-pressed="true"] {
-  background: var(--text);
-  border-color: var(--text);
-  color: var(--bg);
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
 }
 
 .filter-status {
@@ -760,7 +761,7 @@ h3 {
   margin-left: auto;
 }
 
-/* Date-grouped editorial concert rows (hairline-ruled, zero drop shadows) */
+/* Date-grouped editorial concert rows (hairline-ruled, zero cards or drop shadows) */
 .day-group {
   margin-bottom: 22px;
 }
@@ -801,12 +802,12 @@ h3 {
   display: grid;
   grid-template-columns: 46px minmax(0, 1fr) auto;
   gap: 12px;
-  align-items: baseline;
+  align-items: start;
   background: transparent;
   border: 0;
   border-bottom: 1px solid var(--line);
   border-radius: 0;
-  padding: 10px 4px;
+  padding: 11px 4px;
   transition: background-color 0.1s ease;
 }
 
@@ -823,7 +824,7 @@ h3 {
   border: 0;
   border-radius: 0;
   text-align: left;
-  padding: 0;
+  padding: 2px 0 0;
   line-height: 1.15;
 }
 
@@ -857,25 +858,25 @@ h3 {
 }
 
 .show-card-title {
-  display: inline-block;
-  font-family: var(--font-body);
-  font-weight: 700;
-  font-size: 1rem;
-  line-height: 1.28;
+  display: block;
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(1.2rem, 2.4vw, 1.48rem);
+  line-height: 1.12;
+  letter-spacing: 0.015em;
   color: var(--text);
   text-decoration: none;
-  margin-bottom: 2px;
+  margin-bottom: 4px;
 }
 
 .show-card-title:hover {
   color: var(--accent);
-  text-decoration: underline;
 }
 
 .show-card-supports {
-  font-size: 0.88rem;
+  font-size: 0.9rem;
   color: var(--muted);
-  margin: 0 0 3px;
+  margin: 0 0 4px;
 }
 
 .show-card-meta {
@@ -901,36 +902,38 @@ h3 {
 .tag-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 5px;
+  gap: 5px;
+  margin-top: 6px;
 }
 
 .tag {
   display: inline-block;
-  background: transparent;
-  border: 1px solid var(--line);
-  color: var(--faint);
-  font-size: 11px;
+  background: var(--surface-2);
+  border: 0;
+  color: var(--muted);
+  font-size: 11.5px;
   font-weight: 500;
-  padding: 1px 6px;
-  border-radius: 2px;
+  padding: 2px 7px;
+  border-radius: 5px;
   text-decoration: none;
+  transition: background-color 0.12s ease, color 0.12s ease;
 }
 
 a.tag:hover {
-  border-color: var(--text);
-  color: var(--text);
+  background: var(--text);
+  color: var(--bg);
 }
 
 .badge {
   display: inline-block;
+  font-family: var(--font-body);
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  padding: 1px 5px;
-  border-radius: 2px;
-  margin-right: 5px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  margin-right: 6px;
   vertical-align: middle;
 }
 
@@ -954,6 +957,7 @@ a.tag:hover {
   flex-direction: column;
   align-items: flex-end;
   gap: 6px;
+  padding-top: 2px;
 }
 
 .price-chip {
@@ -1061,8 +1065,11 @@ a.tag:hover {
 }
 
 .act-name {
-  font-weight: 700;
-  font-size: 1rem;
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: 0.015em;
+  font-size: 1.2rem;
+  line-height: 1.15;
   color: var(--text);
 }
 
@@ -1082,8 +1089,8 @@ a.tag:hover {
   background: var(--accent);
   color: var(--accent-text);
   border: 0;
-  border-radius: 3px;
-  padding: 6px 12px;
+  border-radius: 8px;
+  padding: 7px 13px;
   font-family: var(--font-body);
   font-size: 13px;
   font-weight: 700;
@@ -1229,7 +1236,7 @@ a.tag:hover {
 
 @media (max-width: 600px) {
   .show-card {
-    grid-template-columns: 54px minmax(0, 1fr);
+    grid-template-columns: 46px minmax(0, 1fr);
     align-items: start;
   }
   .show-card-action {
