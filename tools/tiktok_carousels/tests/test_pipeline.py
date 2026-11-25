@@ -65,9 +65,11 @@ class TestGenresConfigAndWorkflow(unittest.TestCase):
                 canonical_genres,
                 f"Genre filter_label {g['filter_label']!r} not in src/config.mjs ALL_GENRES",
             )
-            self.assertLessEqual(len(g["hashtags"]), 5, f"Too many hashtags for {g['slug']}")
-            for tag in g["hashtags"]:
-                self.assertTrue(tag.startswith("#"), f"Hashtag must start with #: {tag}")
+            self.assertEqual(
+                g["hashtags"],
+                ["#nyc", "#brooklyn", "#concerts", "#livemusic", f"#{g['slug']}"],
+                f"Unexpected hashtags for {g['slug']}: {g['hashtags']}",
+            )
 
     def test_workflow_yaml_valid_zero_artifacts_and_sha_pinned(self) -> None:
         raw = WORKFLOW_PATH.read_text(encoding="utf-8")

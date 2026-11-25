@@ -194,29 +194,26 @@ def build_tiktok_copy(
     weekend_range: str,
     city_label: str,
 ) -> tuple[str, str, list[str], str]:
-    """Build compliant TikTok title (<=90 UTF-16), description (<=4000 UTF-16, <=5 hashtags), and sound query."""
+    """Build clean, concise TikTok title (<=90 UTF-16), description (<=4000 UTF-16, <=5 hashtags), and sound query."""
     display_name = str(genre.get("display_name", "Live")).strip()
     shows: list[dict[str, Any]] = list(genre.get("shows") or [])
     hashtags = [str(h).strip() for h in (genre.get("hashtags") or []) if str(h).strip()][:MAX_HASHTAGS]
 
-    raw_title = f"{city_label} {display_name} Shows · {weekend_range}"
+    city_short = city_label.split("/")[0].strip() if "/" in city_label else city_label.strip()
+    raw_title = f"{city_short} {display_name} Shows This Weekend"
     title = truncate_utf16(raw_title, MAX_TITLE_UTF16)
 
-    lines: list[str] = [f"{display_name} shows in {city_label} this weekend ({weekend_range}):", ""]
-    for idx, show in enumerate(shows, start=1):
-        headliner = str(show.get("headliner", "Live Show")).strip()
-        venue = str(show.get("venue_name", "")).strip()
-        short_date = str(show.get("short_date") or show.get("relative_day") or "").strip()
-        time_str = str(show.get("time_display") or "").strip()
-        price = str(show.get("price_display") or "").strip()
-        parts = [p for p in (short_date, time_str, price) if p]
-        meta = " · ".join(parts)
-        lines.append(f"{idx}. {headliner} @ {venue}" + (f" ({meta})" if meta else ""))
-
-    lines.append("")
-    lines.append("Swipe through the bill and preview every artist on Setnik.")
+    lead = (
+        f"{city_short} {display_name} shows this weekend ({weekend_range})."
+        if weekend_range
+        else f"{city_short} {display_name} shows this weekend."
+    )
+    lines: list[str] = [
+        lead,
+        "Swipe for the lineup — hear 30s previews on Setnik.",
+    ]
     if hashtags:
-        lines.append(" ".join(hashtags))
+        lines.extend(["", " ".join(hashtags)])
 
     description = truncate_utf16("\n".join(lines), MAX_DESC_UTF16)
     headliner_sound_query = str(shows[0].get("headliner", "")).strip() if shows else ""
