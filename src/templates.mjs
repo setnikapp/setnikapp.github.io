@@ -343,14 +343,24 @@ function renderFilterBar(shows) {
   </div>`;
 }
 
-function renderDateGroupedShows(shows, ctx, emptyMessage = 'No upcoming shows are listed in this window right now.') {
+export const MAX_HUB_SSR_SHOWS = 120;
+
+function renderDateGroupedShows(
+  shows,
+  ctx,
+  emptyMessage = 'No upcoming shows are listed in this window right now.',
+  { maxShows = null, browseAllHref = null, browseAllLabel = null } = {},
+) {
   if (!shows || shows.length === 0) {
     return html`<div class="empty-state">
       <p>${emptyMessage}</p>
       <p><a href="${href(ctx.basePath, '/')}">Browse all local hubs</a> or check the Setnik Android app for live community flyers.</p>
     </div>`;
   }
-  const groups = groupByDate(shows);
+  const truncated = Boolean(maxShows && shows.length > maxShows);
+  const visibleShows = truncated ? shows.slice(0, maxShows) : shows;
+  const remaining = shows.length - visibleShows.length;
+  const groups = groupByDate(visibleShows);
   return html`${groups.map(([ymd, items]) => html`<section class="day-group" data-day-group>
     <h2 class="day-heading">
       <span>${ymd !== 'unknown' ? formatLongDate(ymd) : 'Upcoming'}</span>
@@ -359,7 +369,10 @@ function renderDateGroupedShows(shows, ctx, emptyMessage = 'No upcoming shows ar
     <ul class="show-list">
       ${items.map((s) => renderShowCard(s, ctx))}
     </ul>
-  </section>`)}`;
+  </section>`)}${truncated ? html`<div class="hub-more-callout">
+    <p>Showing the next <strong>${visibleShows.length}</strong> of <strong>${shows.length}</strong> upcoming shows (${remaining} more later this month).</p>
+    ${browseAllHref ? html`<a class="btn-secondary" href="${href(ctx.basePath, browseAllHref)}">${browseAllLabel || `Browse all ${shows.length} shows in interactive calendar →`}</a>` : ''}
+  </div>` : ''}`;
 }
 
 /** 1. Homepage (/) — Compact logo + tagline + Google Play badge, then immediate City & Date filtered listings */
@@ -375,7 +388,7 @@ export function renderHomePage({ shows, homeShows = shows, homeMetros = [], week
 
   return layout({
     title: `${APP_NAME} — Local Live Music, Indie Concerts & Band Previews`,
-    description: `Discover upcoming local concerts and live music near you across major US & Canadian cities. Browse shows this weekend, this week, and next week, hear 30-second band previews, and swipe bills on Setnik.`,
+    description: `Find local concerts across top US and Canadian cities. Filter tonight, this weekend, or by genre, hear 30-second band previews, and swipe on Setnik.`,
     canonicalPath: '/',
     pageSlug,
     ctx,
@@ -405,6 +418,7 @@ export function renderHomePage({ shows, homeShows = shows, homeMetros = [], week
                 data-metro-name="${m.shortName}"
                 data-metro-total="${m.totalCount}"
                 data-hub-href="${href(basePath, m.hubPath)}"
+                data-tonight-href="${href(basePath, m.tonightPath)}"
                 data-weekend-href="${href(basePath, m.weekendPath)}"
                 aria-pressed="${idx === 0 ? 'true' : 'false'}"
               >${m.shortName}</button>`)}
@@ -417,6 +431,7 @@ export function renderHomePage({ shows, homeShows = shows, homeMetros = [], week
                 data-metro-name="all cities"
                 data-metro-total="${shows.length}"
                 data-hub-href="${href(basePath, '/venues/')}"
+                data-tonight-href="${href(basePath, '/venues/')}"
                 data-weekend-href="${href(basePath, weekendHubs[0]?.path || '/')}"
                 aria-pressed="false"
               >All</button>` : ''}
@@ -517,6 +532,7 @@ export function renderHomePage({ shows, homeShows = shows, homeMetros = [], week
 /** 2. Weekend Hub Page (e.g. /nyc-shows-this-weekend/) — NO Event JSON-LD! */
 export function renderWeekendHubPage(hub, relatedAreaHubs, ctx) {
   const { siteUrl, basePath } = ctx;
+  const visibleShows = hub.shows.slice(0, MAX_HUB_SSR_SHOWS);
   const crumbs = [
     { name: 'Home', path: '/', url: canonicalUrl(siteUrl, '/') },
     { name: `${hub.metro.shortName} Live Music`, path: `/${hub.metro.slug}-live-music/`, url: canonicalUrl(siteUrl, `/${hub.metro.slug}-live-music/`) },
@@ -541,12 +557,22 @@ export function renderWeekendHubPage(hub, relatedAreaHubs, ctx) {
           <a class="btn-primary" id="hub-cta-${hub.slug}" href="${playStoreUrl(hub.slug)}" rel="noopener">
             ${playArrowIcon()} ${PRIMARY_CTA_LABEL}
           </a>
+          <a class="btn-secondary" href="${href(basePath, `/${hub.metro.slug}-concerts-tonight/`)}">${hub.metro.shortName} Concerts Tonight</a>
           <a class="btn-secondary" href="${href(basePath, `/${hub.metro.slug}-live-music/`)}">Full 30-day ${hub.metro.shortName} calendar</a>
         </div>
       </section>
 
-      ${renderFilterBar(hub.shows)}
-      ${renderDateGroupedShows(hub.shows, ctx, `No ${hub.metro.shortName} shows are posted for this weekend yet. Check the full 30-day calendar or open Setnik for fresh flyer uploads.`)}
+      ${renderFilterBar(visibleShows)}
+      ${renderDateGroupedShows(
+        hub.shows,
+        ctx,
+        `No ${hub.metro.shortName} shows are posted for this weekend yet. Check the full 30-day calendar or open Setnik for fresh flyer uploads.`,
+        {
+          maxShows: MAX_HUB_SSR_SHOWS,
+          browseAllHref: `/?city=${hub.metro.id}&when=weekend`,
+          browseAllLabel: `Browse all ${hub.shows.length} ${hub.metro.shortName} weekend shows →`,
+        },
+      )}
 
       ${relatedAreaHubs.length ? html`<section class="section">
         <div class="section-head">
@@ -562,9 +588,77 @@ export function renderWeekendHubPage(hub, relatedAreaHubs, ctx) {
   });
 }
 
+/** 2b. Tonight Hub Page (e.g. /nyc-concerts-tonight/) — NO Event JSON-LD! */
+export function renderTonightHubPage(hub, relatedAreaHubs, ctx) {
+  const { siteUrl, basePath } = ctx;
+  const visibleShows = hub.shows.slice(0, MAX_HUB_SSR_SHOWS);
+  const crumbs = [
+    { name: 'Home', path: '/', url: canonicalUrl(siteUrl, '/') },
+    { name: `${hub.metro.shortName} Live Music`, path: `/${hub.metro.slug}-live-music/`, url: canonicalUrl(siteUrl, `/${hub.metro.slug}-live-music/`) },
+    { name: `${hub.metro.shortName} Concerts Tonight`, path: hub.path, url: canonicalUrl(siteUrl, hub.path) },
+  ];
+
+  const leadText = hub.shows.length > 0
+    ? `${hub.shows.length} live music ${hub.shows.length === 1 ? 'show' : 'shows'} in ${hub.metro.name} tonight (${hub.todayLabel}). Preview bands right in the list or tap any bill for full set details.`
+    : `No shows left on tonight’s schedule in ${hub.metro.name} (${hub.todayLabel})—see tomorrow night’s picks below or browse the full 30-day calendar.`;
+
+  return layout({
+    title: `${hub.title} (${hub.todayShort}) | ${APP_NAME}`,
+    description: `See ${hub.shows.length} live concerts in ${hub.metro.name} tonight (${hub.todayShort}). Hear 30-second band previews and swipe local shows on ${APP_NAME}.`,
+    canonicalPath: hub.path,
+    pageSlug: hub.slug,
+    ctx,
+    jsonLdBlocks: [buildBreadcrumbJsonLd(crumbs)],
+    body: html`
+      ${renderBreadcrumbs(crumbs, basePath)}
+      <section class="hero">
+        <span class="kicker">Live Music Tonight · ${hub.todayLabel}</span>
+        <h1>${hub.title}</h1>
+        <p class="lead">${leadText}</p>
+        <div class="leaf-actions">
+          <a class="btn-primary" id="hub-cta-${hub.slug}" href="${playStoreUrl(hub.slug)}" rel="noopener">
+            ${playArrowIcon()} ${PRIMARY_CTA_LABEL}
+          </a>
+          <a class="btn-secondary" href="${href(basePath, hub.weekendPath)}">${hub.metro.shortName} Shows This Weekend</a>
+          <a class="btn-secondary" href="${href(basePath, `/${hub.metro.slug}-live-music/`)}">Full 30-day ${hub.metro.shortName} calendar</a>
+        </div>
+      </section>
+
+      ${hub.shows.length > 0 ? html`
+        ${renderFilterBar(visibleShows)}
+        ${renderDateGroupedShows(hub.shows, ctx, '', {
+          maxShows: MAX_HUB_SSR_SHOWS,
+          browseAllHref: `/?city=${hub.metro.id}&when=tonight`,
+          browseAllLabel: `Browse all ${hub.shows.length} ${hub.metro.shortName} shows tonight →`,
+        })}
+      ` : ''}
+
+      ${(hub.shows.length < 6 && hub.tomorrowShows && hub.tomorrowShows.length > 0) ? html`<section class="section">
+        <div class="section-head">
+          <h2>Tomorrow Night in ${hub.metro.shortName}</h2>
+          <a class="section-more" href="${href(basePath, `/?city=${hub.metro.id}&when=tomorrow`)}">Filter tomorrow →</a>
+        </div>
+        ${renderDateGroupedShows(hub.tomorrowShows.slice(0, 30), ctx)}
+      </section>` : ''}
+
+      ${relatedAreaHubs.length ? html`<section class="section">
+        <div class="section-head">
+          <h2>Explore ${hub.metro.shortName} Areas</h2>
+        </div>
+        <div class="tag-row">
+          ${relatedAreaHubs.map((a) => html`<a class="tag" href="${href(basePath, a.path)}">${a.label} (${a.shows.length})</a>`)}
+        </div>
+      </section>` : ''}
+
+      ${renderCtaBanner(hub.slug, `Pick tonight’s ${hub.metro.shortName} show with 30-second band previews on Setnik.`)}
+    `,
+  });
+}
+
 /** 3. City / Borough / Neighborhood Hub Page (e.g. /brooklyn-live-music/, /jersey-city-live-music/) — NO Event JSON-LD! */
 export function renderAreaHubPage(hub, siblingHubs, topVenues, ctx, metroGenres = []) {
   const { siteUrl, basePath } = ctx;
+  const visibleShows = hub.shows.slice(0, MAX_HUB_SSR_SHOWS);
   const crumbs = [
     { name: 'Home', path: '/', url: canonicalUrl(siteUrl, '/') },
     ...(hub.parentMetroPath && hub.parentMetroPath !== hub.path
@@ -590,12 +684,22 @@ export function renderAreaHubPage(hub, siblingHubs, topVenues, ctx, metroGenres 
           <a class="btn-primary" id="hub-cta-${hub.slug}" href="${playStoreUrl(hub.slug)}" rel="noopener">
             ${playArrowIcon()} ${PRIMARY_CTA_LABEL}
           </a>
+          ${hub.tonightPath ? html`<a class="btn-secondary" href="${href(basePath, hub.tonightPath)}">${hub.metro.shortName} Concerts Tonight</a>` : ''}
           ${hub.weekendPath ? html`<a class="btn-secondary" href="${href(basePath, hub.weekendPath)}">${hub.metro.shortName} Shows This Weekend</a>` : ''}
         </div>
       </section>
 
-      ${renderFilterBar(hub.shows)}
-      ${renderDateGroupedShows(hub.shows, ctx, `No upcoming shows listed in ${hub.label} right now.`)}
+      ${renderFilterBar(visibleShows)}
+      ${renderDateGroupedShows(
+        hub.shows,
+        ctx,
+        `No upcoming shows listed in ${hub.label} right now.`,
+        {
+          maxShows: MAX_HUB_SSR_SHOWS,
+          browseAllHref: `/?city=${hub.metro.id}&when=all`,
+          browseAllLabel: `Browse all ${hub.shows.length} ${hub.label} shows in interactive calendar →`,
+        },
+      )}
 
       ${metroGenres.length ? html`<section class="section">
         <div class="section-head">
@@ -778,7 +882,16 @@ export function renderGenrePage(genreObj, allGenres, ctx, cityGenreHubs = []) {
         </div>
       </section>` : ''}
 
-      ${renderDateGroupedShows(genreObj.shows, ctx, `No upcoming ${genreObj.name} shows are listed right now.`)}
+      ${renderDateGroupedShows(
+        genreObj.shows,
+        ctx,
+        `No upcoming ${genreObj.name} shows are listed right now.`,
+        {
+          maxShows: MAX_HUB_SSR_SHOWS,
+          browseAllHref: `/?city=all&when=all&genre=${genreObj.slug}`,
+          browseAllLabel: `Browse all ${genreObj.shows.length} ${genreObj.name} shows in interactive calendar →`,
+        },
+      )}
 
       <section class="section">
         <div class="section-head">
@@ -797,6 +910,7 @@ export function renderGenrePage(genreObj, allGenres, ctx, cityGenreHubs = []) {
 /** 6b. City × Genre Hub Page (e.g. /nyc/electronic-shows/, /la/indie-rock-shows/) — NO Event JSON-LD! */
 export function renderCityGenrePage(hub, siblingGenresInCity = [], otherCitiesForGenre = [], ctx) {
   const { siteUrl, basePath } = ctx;
+  const visibleShows = hub.shows.slice(0, MAX_HUB_SSR_SHOWS);
   const metroHubPath = `/${hub.metro.slug}-live-music/`;
   const genreHubPath = `/genres/${hub.genreSlug}/`;
   const crumbs = [
@@ -827,8 +941,17 @@ export function renderCityGenrePage(hub, siblingGenresInCity = [], otherCitiesFo
         </div>
       </section>
 
-      ${renderFilterBar(hub.shows)}
-      ${renderDateGroupedShows(hub.shows, ctx, `No upcoming ${hub.genreName} shows are listed in ${hub.metro.shortName} right now.`)}
+      ${renderFilterBar(visibleShows)}
+      ${renderDateGroupedShows(
+        hub.shows,
+        ctx,
+        `No upcoming ${hub.genreName} shows are listed in ${hub.metro.shortName} right now.`,
+        {
+          maxShows: MAX_HUB_SSR_SHOWS,
+          browseAllHref: `/?city=${hub.metro.id}&when=all&genre=${hub.genreSlug}`,
+          browseAllLabel: `Browse all ${hub.shows.length} ${hub.metro.shortName} ${hub.genreName} shows →`,
+        },
+      )}
 
       ${siblingGenresInCity.length ? html`<section class="section">
         <div class="section-head">

@@ -76,6 +76,10 @@ describe('setnik-web static site SEO & compliance', () => {
       assert.ok(fs.existsSync(path.join(tmpDir, 'assets/og-card.png')), 'Branded OG share card must exist');
 
       // Expected hyperlocal hubs (priority NYC, LA, Chicago + Toronto Canada)
+      assert.ok(fs.existsSync(path.join(tmpDir, 'nyc-concerts-tonight/index.html')));
+      assert.ok(fs.existsSync(path.join(tmpDir, 'la-concerts-tonight/index.html')));
+      assert.ok(fs.existsSync(path.join(tmpDir, 'chicago-concerts-tonight/index.html')));
+      assert.ok(fs.existsSync(path.join(tmpDir, 'toronto-concerts-tonight/index.html')));
       assert.ok(fs.existsSync(path.join(tmpDir, 'nyc-shows-this-weekend/index.html')));
       assert.ok(fs.existsSync(path.join(tmpDir, 'la-shows-this-weekend/index.html')));
       assert.ok(fs.existsSync(path.join(tmpDir, 'chicago-shows-this-weekend/index.html')));
@@ -94,13 +98,19 @@ describe('setnik-web static site SEO & compliance', () => {
       assert.ok(fs.existsSync(path.join(tmpDir, 'nyc/post-punk-shows/index.html')));
       const nycHubHtml = fs.readFileSync(path.join(tmpDir, 'nyc-live-music/index.html'), 'utf8');
       assert.ok(nycHubHtml.includes('/nyc/indie-rock-shows/'), 'NYC metro hub should cross-link to /nyc/indie-rock-shows/');
+      assert.ok(nycHubHtml.includes('/nyc-concerts-tonight/'), 'NYC metro hub should cross-link to /nyc-concerts-tonight/');
+      const nycWkHtml = fs.readFileSync(path.join(tmpDir, 'nyc-shows-this-weekend/index.html'), 'utf8');
+      assert.ok(nycWkHtml.includes('/nyc-concerts-tonight/'), 'NYC weekend hub should cross-link to /nyc-concerts-tonight/');
       const indieGenreHtml = fs.readFileSync(path.join(tmpDir, 'genres/indie-rock/index.html'), 'utf8');
       assert.ok(indieGenreHtml.includes('/nyc/indie-rock-shows/'), 'Indie Rock genre hub should cross-link to /nyc/indie-rock-shows/');
 
-      // Homepage shareable filter URL controls & in-list Preview/Save triggers
+      // Homepage meta description length, shareable filter URL controls & in-list Preview/Save triggers
       const homeHtml = fs.readFileSync(path.join(tmpDir, 'index.html'), 'utf8');
+      const homeDescMatch = /<meta name="description" content="([^"]+)"/.exec(homeHtml);
+      assert.ok(homeDescMatch && homeDescMatch[1].length <= 160, `Homepage meta description should be <= 160 chars, got ${homeDescMatch?.[1]?.length}`);
       assert.ok(homeHtml.includes('data-copy-filter-link'), 'Homepage should include Share link button');
       assert.ok(homeHtml.includes('data-metro-slug="nyc"'), 'Homepage city buttons should include metro slug for shareable URLs');
+      assert.ok(homeHtml.includes('data-tonight-href="/nyc-concerts-tonight/"'), 'Homepage city buttons should include tonight hub href');
       assert.ok(homeHtml.includes('data-row-preview'), 'Homepage listing rows should include in-list Preview trigger');
       assert.ok(homeHtml.includes('data-row-save'), 'Homepage listing rows should include in-list Save trigger');
       assert.ok(homeHtml.includes('data-row-feedback'), 'Homepage listing rows should include inline feedback slot');
@@ -322,6 +332,71 @@ describe('setnik-web static site SEO & compliance', () => {
       url,
       'https://play.google.com/store/apps/details?id=com.setnik.app&referrer=utm_source%3Dsetnik_web%26utm_medium%3Dseo%26utm_campaign%3Dnyc-shows-this-weekend',
     );
+  });
+
+  it('caps mega-hub SSR show lists at 120 rows and prunes 1-show suburb hubs across all metros', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'setnik-web-cap-'));
+    try {
+      const now = new Date('2026-11-24T17:00:00Z');
+      const shows = [];
+      for (let i = 0; i < 135; i++) {
+        const day = String(25 + (i % 6)).padStart(2, '0');
+        shows.push({
+          id: `cap-${i}`,
+          startsAt: `2026-11-${day}T20:00:00-05:00`,
+          venue: {
+            name: `Club ${i % 10}`,
+            neighborhood: 'Williamsburg',
+            area: 'Brooklyn',
+            metro: 'nyc',
+            city: 'Brooklyn, NY',
+            address: `${100 + i} Wythe Ave, Brooklyn, NY 11249`,
+            addressVisibility: 'public',
+          },
+          acts: [{ name: `Band ${i}`, order: 0 }],
+          genres: ['Indie Rock'],
+          price: { min: 15 },
+          status: 'scheduled',
+          source: { provider: 'venue_site', url: '', fetchedAt: now.toISOString() },
+        });
+      }
+      // Single-show NJ suburb inside NYC metro must NOT generate a thin suburb hub
+      shows.push({
+        id: 'suburb-single',
+        startsAt: '2026-11-27T20:00:00-05:00',
+        venue: {
+          name: 'Tiny Room',
+          neighborhood: 'Totowa',
+          area: 'Totowa',
+          metro: 'nyc',
+          city: 'Totowa, NJ',
+          address: '10 Union Blvd, Totowa, NJ 07512',
+          addressVisibility: 'public',
+        },
+        acts: [{ name: 'Suburb Band', order: 0 }],
+        genres: ['Rock'],
+        price: { min: 10 },
+        status: 'scheduled',
+        source: { provider: 'jambase', url: '', fetchedAt: now.toISOString() },
+      });
+
+      await buildSite({
+        outDir: tmpDir,
+        siteUrl: 'https://setnik.example',
+        now,
+        customData: { shows, flags: { jambaseEnabled: true, deezerEnabled: true }, attribution: [] },
+        log: { info: () => {}, warn: () => {} },
+      });
+
+      const nycHtml = fs.readFileSync(path.join(tmpDir, 'nyc-live-music/index.html'), 'utf8');
+      const cardCount = (nycHtml.match(/class="show-card"/g) || []).length;
+      assert.equal(cardCount, 120, `Expected mega-hub SSR cap of 120 show cards, got ${cardCount}`);
+      assert.ok(nycHtml.includes('class="hub-more-callout"'), 'Mega-hub should render .hub-more-callout');
+      assert.ok(nycHtml.includes('/?city=nyc&amp;when=all'), 'Mega-hub callout should link to full interactive calendar');
+      assert.ok(!fs.existsSync(path.join(tmpDir, 'totowa-live-music/index.html')), '1-show NYC suburb hub should be pruned');
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it('contains no personal account handle or legacy app names in any repository file', () => {
