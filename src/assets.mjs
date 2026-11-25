@@ -405,6 +405,33 @@ h3 {
   text-decoration: underline;
 }
 
+.copy-link-btn {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.12s ease, color 0.12s ease, background-color 0.12s ease;
+}
+
+.copy-link-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--surface);
+}
+
+.copy-link-btn.is-copied {
+  border-color: var(--good);
+  color: var(--good);
+  background: var(--good-bg);
+}
+
 .custom-dates-bar {
   display: flex;
   align-items: center;
@@ -1226,6 +1253,108 @@ a.tag:hover {
   text-decoration: underline;
 }
 
+/* Android-only sticky bottom app-download bar (shown via JS on Android devices) */
+body.has-android-bar {
+  padding-bottom: 74px;
+}
+
+.android-sticky-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  background: var(--text);
+  color: var(--bg);
+  border-top: 1px solid #2A2A2A;
+  padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px));
+  box-shadow: 0 -4px 18px rgba(20, 20, 20, 0.22);
+}
+
+.android-sticky-bar[hidden] {
+  display: none;
+}
+
+.android-bar-inner {
+  max-width: var(--max-w);
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.android-bar-icon {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+}
+
+.android-bar-copy {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.android-bar-copy strong {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #FFFFFF;
+}
+
+.android-bar-copy span {
+  font-size: 11.5px;
+  color: #CFC8B8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.android-bar-cta {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: var(--accent-text);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 8px 14px;
+  border-radius: 8px;
+  white-space: nowrap;
+  transition: background-color 0.12s ease;
+}
+
+.android-bar-cta:hover {
+  background: var(--accent-hover);
+  color: var(--accent-text);
+}
+
+.android-bar-close {
+  flex-shrink: 0;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: #B9B09A;
+  font-size: 20px;
+  line-height: 1;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.android-bar-close:hover {
+  color: #FFFFFF;
+  background: rgba(255, 255, 255, 0.1);
+}
+
 /* Responsive */
 @media (max-width: 820px) {
   .hero-grid,
@@ -1334,9 +1463,12 @@ export function buildPlayerJs() {
     var expMore = explorer.querySelector('[data-explorer-more]');
     var expEmpty = explorer.querySelector('[data-explorer-empty]');
     var expReset = explorer.querySelector('[data-explorer-reset]');
+    var copyLinkBtn = explorer.querySelector('[data-copy-filter-link]');
 
-    var activeCity = explorer.getAttribute('data-default-metro') || 'all';
-    var activeWhen = explorer.getAttribute('data-default-when') || 'this-week';
+    var defaultCity = explorer.getAttribute('data-default-metro') || 'all';
+    var defaultWhen = explorer.getAttribute('data-default-when') || 'this-week';
+    var activeCity = defaultCity;
+    var activeWhen = defaultWhen;
     var activeGenre = 'all';
     var PAGE_SIZE = 40;
     var renderLimit = PAGE_SIZE;
@@ -1349,6 +1481,79 @@ export function buildPlayerJs() {
         d0.setUTCDate(d0.getUTCDate() + 7);
         dateToInput.value = d0.toISOString().slice(0, 10);
       }
+    }
+
+    function syncPressedButtons() {
+      cityBtns.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-city-btn') === activeCity ? 'true' : 'false'); });
+      whenBtns.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-when-btn') === activeWhen ? 'true' : 'false'); });
+      genreBtns.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-genre-btn') === activeGenre ? 'true' : 'false'); });
+    }
+
+    function applyUrlParams() {
+      if (typeof URLSearchParams === 'undefined') return;
+      var params = new URLSearchParams(window.location.search || '');
+      var qCity = (params.get('city') || '').trim().toLowerCase();
+      var qWhen = (params.get('when') || '').trim().toLowerCase();
+      var qGenre = (params.get('genre') || '').trim().toLowerCase();
+      var qFrom = (params.get('from') || '').trim();
+      var qTo = (params.get('to') || '').trim();
+
+      if (qCity) {
+        var matchedCityBtn = cityBtns.find(function (b) {
+          return (b.getAttribute('data-city-btn') || '').toLowerCase() === qCity ||
+            (b.getAttribute('data-metro-slug') || '').toLowerCase() === qCity;
+        });
+        if (matchedCityBtn) activeCity = matchedCityBtn.getAttribute('data-city-btn') || defaultCity;
+      }
+
+      if (qWhen) {
+        var matchedWhenBtn = whenBtns.find(function (b) {
+          return (b.getAttribute('data-when-btn') || '').toLowerCase() === qWhen;
+        });
+        if (matchedWhenBtn) activeWhen = matchedWhenBtn.getAttribute('data-when-btn') || defaultWhen;
+      }
+
+      if (qGenre) {
+        var matchedGenreBtn = genreBtns.find(function (b) {
+          return (b.getAttribute('data-genre-btn') || '').toLowerCase() === qGenre;
+        });
+        if (matchedGenreBtn) activeGenre = matchedGenreBtn.getAttribute('data-genre-btn') || 'all';
+      }
+
+      var ymdRx = /^\\d{4}-\\d{2}-\\d{2}$/;
+      if (activeWhen === 'custom') {
+        if (dateFromInput && ymdRx.test(qFrom)) dateFromInput.value = qFrom;
+        if (dateToInput && ymdRx.test(qTo)) dateToInput.value = qTo;
+      }
+
+      syncPressedButtons();
+    }
+
+    function buildFilterUrl(alwaysExplicit) {
+      var url = new URL(window.location.href);
+      var params = new URLSearchParams();
+      var isDefault = activeCity === defaultCity && activeWhen === defaultWhen && activeGenre === 'all';
+      if (alwaysExplicit || !isDefault) {
+        params.set('city', activeCity);
+        params.set('when', activeWhen);
+        if (activeGenre !== 'all') params.set('genre', activeGenre);
+        if (activeWhen === 'custom') {
+          if (dateFromInput && dateFromInput.value) params.set('from', dateFromInput.value);
+          if (dateToInput && dateToInput.value) params.set('to', dateToInput.value);
+        }
+      }
+      var qs = params.toString();
+      return url.pathname + (qs ? '?' + qs : '') + (url.hash || '');
+    }
+
+    function syncUrl() {
+      if (!window.history || typeof window.history.replaceState !== 'function') return;
+      try {
+        var next = buildFilterUrl(false);
+        if (next !== window.location.pathname + window.location.search + window.location.hash) {
+          window.history.replaceState(null, '', next);
+        }
+      } catch (_) {}
     }
 
     function loadMetro(id) {
@@ -1535,10 +1740,11 @@ export function buildPlayerJs() {
 
     var lastMatched = [];
 
-    function syncExplorer(resetPage) {
+    function syncExplorer(resetPage, shouldUpdateUrl) {
       if (resetPage !== false) renderLimit = PAGE_SIZE;
       if (customBar) customBar.hidden = activeWhen !== 'custom';
       updateMoreLink();
+      if (shouldUpdateUrl !== false) syncUrl();
 
       var customFrom = dateFromInput ? dateFromInput.value : '';
       var customTo = dateToInput ? dateToInput.value : '';
@@ -1571,16 +1777,16 @@ export function buildPlayerJs() {
     cityBtns.forEach(function (btn) {
       btn.addEventListener('click', function () {
         activeCity = btn.getAttribute('data-city-btn') || 'all';
-        cityBtns.forEach(function (b) { b.setAttribute('aria-pressed', b === btn ? 'true' : 'false'); });
-        syncExplorer(true);
+        syncPressedButtons();
+        syncExplorer(true, true);
       });
     });
 
     whenBtns.forEach(function (btn) {
       btn.addEventListener('click', function () {
         activeWhen = btn.getAttribute('data-when-btn') || 'all';
-        whenBtns.forEach(function (b) { b.setAttribute('aria-pressed', b === btn ? 'true' : 'false'); });
-        syncExplorer(true);
+        syncPressedButtons();
+        syncExplorer(true, true);
       });
     });
 
@@ -1589,7 +1795,7 @@ export function buildPlayerJs() {
         if (dateToInput && dateToInput.value && dateFromInput.value && dateToInput.value < dateFromInput.value) {
           dateToInput.value = dateFromInput.value;
         }
-        syncExplorer(true);
+        syncExplorer(true, true);
       });
     }
     if (dateToInput) {
@@ -1597,15 +1803,15 @@ export function buildPlayerJs() {
         if (dateFromInput && dateFromInput.value && dateToInput.value && dateToInput.value < dateFromInput.value) {
           dateFromInput.value = dateToInput.value;
         }
-        syncExplorer(true);
+        syncExplorer(true, true);
       });
     }
 
     genreBtns.forEach(function (btn) {
       btn.addEventListener('click', function () {
         activeGenre = btn.getAttribute('data-genre-btn') || 'all';
-        genreBtns.forEach(function (b) { b.setAttribute('aria-pressed', b === btn ? 'true' : 'false'); });
-        syncExplorer(true);
+        syncPressedButtons();
+        syncExplorer(true, true);
       });
     });
 
@@ -1620,13 +1826,72 @@ export function buildPlayerJs() {
       expReset.addEventListener('click', function () {
         activeWhen = 'all';
         activeGenre = 'all';
-        whenBtns.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-when-btn') === 'all' ? 'true' : 'false'); });
-        genreBtns.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-genre-btn') === 'all' ? 'true' : 'false'); });
-        syncExplorer(true);
+        syncPressedButtons();
+        syncExplorer(true, true);
       });
     }
 
-    syncExplorer(true);
+    if (copyLinkBtn) {
+      var copyTimer = null;
+      copyLinkBtn.addEventListener('click', function () {
+        var shareUrl = window.location.origin + buildFilterUrl(true);
+        function markCopied() {
+          copyLinkBtn.textContent = 'Link copied!';
+          copyLinkBtn.classList.add('is-copied');
+          clearTimeout(copyTimer);
+          copyTimer = setTimeout(function () {
+            copyLinkBtn.textContent = 'Share link';
+            copyLinkBtn.classList.remove('is-copied');
+          }, 1800);
+        }
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          navigator.clipboard.writeText(shareUrl).then(markCopied).catch(function () {
+            window.prompt('Copy shareable filter link:', shareUrl);
+          });
+        } else {
+          window.prompt('Copy shareable filter link:', shareUrl);
+        }
+      });
+    }
+
+    window.addEventListener('popstate', function () {
+      activeCity = defaultCity;
+      activeWhen = defaultWhen;
+      activeGenre = 'all';
+      applyUrlParams();
+      syncExplorer(true, false);
+    });
+
+    applyUrlParams();
+    syncExplorer(true, false);
+  }
+
+  // Android-only dismissible sticky app-download bar
+  var androidBar = document.querySelector('[data-android-bar]');
+  if (androidBar) {
+    var ua = (navigator.userAgent || '');
+    var previewParam = (window.location.search || '').indexOf('preview_android_bar=1') !== -1;
+    var isAndroid = /Android/i.test(ua) || previewParam;
+    var dismissed = false;
+    try {
+      dismissed = sessionStorage.getItem('setnik_android_bar_dismissed') === '1';
+    } catch (_) {}
+
+    if (isAndroid && !dismissed) {
+      androidBar.hidden = false;
+      document.body.classList.add('has-android-bar');
+    }
+
+    var closeBarBtn = androidBar.querySelector('[data-android-bar-close]');
+    if (closeBarBtn) {
+      closeBarBtn.addEventListener('click', function () {
+        androidBar.hidden = true;
+        document.body.classList.remove('has-android-bar');
+        try {
+          sessionStorage.setItem('setnik_android_bar_dismissed', '1');
+        } catch (_) {}
+      });
+    }
   }
 
   // Progressive Deezer 30-second preview lookup via JSONP (mirrors the Setnik app's src/lib/deezer.ts).
