@@ -1,0 +1,48 @@
+{
+  "cards_per_genre": 4,
+  "min_cards_per_genre": 2,
+  "city_label": "NYC / NJ",
+  "metro_id": "nyc",
+  "genres": [
+    {
+      "slug": "rock",
+      "display_name": "Rock",
+      "filter_label": "Rock",
+      "cover_title": "NYC ROCK SHOWS · THIS WEEKEND",
+      "accent_color": "#E4574E",
+      "hashtags": ["#nycrock", "#nyclivemusic", "#brooklynshows", "#nycconcerts", "#setnik"]
+    },
+    {
+      "slug": "punk",
+      "display_name": "Punk",
+      "filter_label": "Punk",
+      "cover_title": "NYC PUNK SHOWS · THIS WEEKEND",
+      "accent_color": "#FF5A36",
+      "hashtags": ["#nycpunk", "#brooklynpunk", "#diymusic", "#nyclivemusic", "#setnik"]
+    },
+    {
+      "slug": "electronic",
+      "display_name": "Electronic",
+      "filter_label": "Electronic",
+      "cover_title": "NYC ELECTRONIC SHOWS · THIS WEEKEND",
+      "accent_color": "#E4574E",
+      "hashtags": ["#nycelectronic", "#brooklynclub", "#nycnightlife", "#nyclivemusic", "#setnik"]
+    },
+    {
+      "slug": "indie",
+      "display_name": "Indie",
+      "filter_label": "Indie Rock",
+      "cover_title": "NYC INDIE SHOWS · THIS WEEKEND",
+      "accent_color": "#5B3FD1",
+      "hashtags": ["#nycindie", "#brooklynindie", "#indierock", "#nyclivemusic", "#setnik"]
+    },
+    {
+      "slug": "metal",
+      "display_name": "Metal",
+      "filter_label": "Metal",
+      "cover_title": "NYC METAL SHOWS · THIS WEEKEND",
+      "accent_color": "#D7263D",
+      "hashtags": ["#nycmetal", "#brooklynmetal", "#heavynyc", "#nyclivemusic", "#setnik"]
+    }
+  ]
+}
