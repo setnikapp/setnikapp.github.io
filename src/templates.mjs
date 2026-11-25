@@ -312,20 +312,11 @@ export function renderHomePage({ shows, homeShows = shows, homeMetros = [], week
   const { siteUrl, basePath } = ctx;
   const pageSlug = 'home';
   const defaultMetro = homeMetros[0] || null;
-  const listings = homeShows && homeShows.length ? homeShows : shows.slice(0, 30);
+  const listings = homeShows && homeShows.length ? homeShows : shows.slice(0, 25);
   const homeAreaHubs = areaHubs.filter((h) => h.priority <= 2 || (h.priority === 3 && h.metro.id === 'nyc')).slice(0, 16);
   const topVenues = venues.slice(0, 10);
-  const topGenres = genres.slice(0, 14);
-  const explorerGenreCounts = new Map();
-  for (const s of listings) {
-    for (const g of s.genres || []) {
-      explorerGenreCounts.set(g, (explorerGenreCounts.get(g) || 0) + 1);
-    }
-  }
-  const explorerGenres = [...explorerGenreCounts.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, 10)
-    .map(([name]) => ({ name, slug: slugify(name, 40) }));
+  const topGenres = genres.slice(0, 16);
+  const explorerGenres = genres.map((g) => ({ name: g.name, slug: g.slug }));
 
   return layout({
     title: `${APP_NAME} — Local Live Music, Indie Concerts & Band Previews`,
@@ -337,7 +328,14 @@ export function renderHomePage({ shows, homeShows = shows, homeMetros = [], week
     jsonLdBlocks: [buildWebSiteJsonLd(siteUrl)],
     body: html`
       <h1 class="sr-only">${APP_NAME} — Local Concerts &amp; Live Music</h1>
-      <section class="home-explorer" data-home-explorer data-default-metro="${defaultMetro ? defaultMetro.id : 'all'}" data-default-when="this-week">
+      <section
+        class="home-explorer"
+        data-home-explorer
+        data-base-path="${basePath}"
+        data-metros="${homeMetros.map((m) => m.id).join(',')}"
+        data-default-metro="${defaultMetro ? defaultMetro.id : 'all'}"
+        data-default-when="this-week"
+      >
         ${homeMetros.length ? html`<div class="explorer-controls" role="region" aria-label="Filter upcoming shows by city, date, and genre">
           <div class="filter-row" role="group" aria-label="City">
             <span class="filter-label">City</span>
@@ -398,12 +396,13 @@ export function renderHomePage({ shows, homeShows = shows, homeMetros = [], week
           ${explorerGenres.length ? html`<div class="filter-row" role="group" aria-label="Genre">
             <span class="filter-label">Genre</span>
             <div class="filter-pills">
-              <button type="button" class="filter-pill" id="genre-btn-all" data-genre-btn="all" aria-pressed="true">All</button>
+              <button type="button" class="filter-pill" id="genre-btn-all" data-genre-btn="all" data-genre-label="All" aria-pressed="true">All</button>
               ${explorerGenres.map((g) => html`<button
                 type="button"
                 class="filter-pill"
                 id="genre-btn-${g.slug}"
                 data-genre-btn="${g.slug}"
+                data-genre-label="${g.name}"
                 aria-pressed="false"
               >${g.name}</button>`)}
             </div>
@@ -413,8 +412,11 @@ export function renderHomePage({ shows, homeShows = shows, homeMetros = [], week
         <div data-explorer-list>
           ${renderDateGroupedShows(listings, ctx, 'Fresh listings sync daily at 6:00 AM EST. Check back shortly or open Setnik on Android.')}
         </div>
+        <div class="load-more-wrap" data-explorer-load-more hidden>
+          <button type="button" class="btn-secondary" data-load-more-btn>Show more shows</button>
+        </div>
         <div class="empty-state" data-explorer-empty hidden>
-          <p>No shows match that city and date window yet.</p>
+          <p>No shows match those filters.</p>
           <p><button type="button" class="btn-secondary" data-explorer-reset>Show all upcoming in this city</button></p>
         </div>
       </section>
