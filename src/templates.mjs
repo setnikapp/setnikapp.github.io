@@ -316,6 +316,16 @@ export function renderHomePage({ shows, homeShows = shows, homeMetros = [], week
   const homeAreaHubs = areaHubs.filter((h) => h.priority <= 2 || (h.priority === 3 && h.metro.id === 'nyc')).slice(0, 16);
   const topVenues = venues.slice(0, 10);
   const topGenres = genres.slice(0, 14);
+  const explorerGenreCounts = new Map();
+  for (const s of listings) {
+    for (const g of s.genres || []) {
+      explorerGenreCounts.set(g, (explorerGenreCounts.get(g) || 0) + 1);
+    }
+  }
+  const explorerGenres = [...explorerGenreCounts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 10)
+    .map(([name]) => ({ name, slug: slugify(name, 40) }));
 
   return layout({
     title: `${APP_NAME} — Local Live Music, Indie Concerts & Band Previews`,
@@ -340,7 +350,7 @@ export function renderHomePage({ shows, homeShows = shows, homeMetros = [], week
       </section>
 
       <section class="home-explorer" data-home-explorer data-default-metro="${defaultMetro ? defaultMetro.id : 'all'}" data-default-when="this-week">
-        ${homeMetros.length ? html`<div class="explorer-controls" role="region" aria-label="Filter upcoming shows by city and date">
+        ${homeMetros.length ? html`<div class="explorer-controls" role="region" aria-label="Filter upcoming shows by city, date, and genre">
           <div class="filter-row" role="group" aria-label="City">
             <span class="filter-label">City</span>
             <div class="filter-pills">
@@ -382,6 +392,20 @@ export function renderHomePage({ shows, homeShows = shows, homeMetros = [], week
               ${defaultMetro ? html`<a class="explorer-more-link" data-explorer-more href="${href(basePath, defaultMetro.hubPath)}">Full ${defaultMetro.shortName} calendar (${defaultMetro.totalCount}) →</a>` : ''}
             </div>
           </div>
+
+          ${explorerGenres.length ? html`<div class="filter-row" role="group" aria-label="Genre">
+            <span class="filter-label">Genre</span>
+            <div class="filter-pills">
+              <button type="button" class="filter-pill" id="genre-btn-all" data-genre-btn="all" aria-pressed="true">All</button>
+              ${explorerGenres.map((g) => html`<button
+                type="button"
+                class="filter-pill"
+                id="genre-btn-${g.slug}"
+                data-genre-btn="${g.slug}"
+                aria-pressed="false"
+              >${g.name}</button>`)}
+            </div>
+          </div>` : ''}
         </div>` : ''}
 
         <div data-explorer-list>
