@@ -288,14 +288,184 @@ h3 {
   max-width: 68ch;
 }
 
-/* Hero surface */
-.hero {
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Compact editorial homepage banner (logo + tagline + Google Play badge, no fluff) */
+.home-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 24px;
+  flex-wrap: wrap;
+  padding: 8px 0 18px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.home-banner-title {
+  margin: 0 0 6px;
+  line-height: 1;
+}
+
+.home-banner-logo {
+  height: clamp(28px, 4.2vw, 36px);
+  width: auto;
+  display: block;
+}
+
+.home-banner-tagline {
+  margin: 0;
+  font-size: 0.98rem;
+  color: var(--muted);
+}
+
+.play-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--text);
+  color: #FFFFFF;
+  text-decoration: none;
+  padding: 8px 15px 8px 12px;
+  border-radius: 10px;
+  border: 1px solid #2A2A2A;
+  transition: background-color 0.14s ease, transform 0.14s ease;
+}
+
+.play-badge:hover {
+  background: #262626;
+  color: #FFFFFF;
+  transform: translateY(-1px);
+}
+
+.play-badge-icon {
+  flex-shrink: 0;
+  display: block;
+}
+
+.play-badge-copy {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.08;
+}
+
+.play-badge-sub {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #CFC8B8;
+}
+
+.play-badge-main {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #FFFFFF;
+}
+
+/* Immediate City + Date filter controls above homepage listings */
+.explorer-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+}
+
+.filter-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--faint);
+  min-width: 42px;
+}
+
+.filter-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.explorer-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.explorer-more-link {
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.explorer-more-link:hover {
+  text-decoration: underline;
+}
+
+/* Compact directory links below listings */
+.directory-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dir-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  padding: clamp(22px, 4vw, 36px);
-  box-shadow: var(--shadow-card);
-  margin-bottom: 28px;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+
+.dir-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.dir-chip span {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--faint);
+}
+
+/* Hub page header (clean editorial, no heavy box shadow) */
+.hero {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  padding: 4px 0 20px;
+  box-shadow: none;
+  margin-bottom: 22px;
 }
 
 .hero-grid {
@@ -1099,6 +1269,95 @@ export function buildPlayerJs() {
         applyFilter(btn.getAttribute('data-filter-kind') || 'genre', btn.getAttribute('data-filter-value') || 'all');
       });
     });
+  }
+
+  // Homepage City + Date (This Weekend / This Week / Next Week / All) instant filter controller.
+  var explorer = document.querySelector('[data-home-explorer]');
+  if (explorer) {
+    var cityBtns = Array.prototype.slice.call(explorer.querySelectorAll('[data-city-btn]'));
+    var whenBtns = Array.prototype.slice.call(explorer.querySelectorAll('[data-when-btn]'));
+    var expCards = Array.prototype.slice.call(explorer.querySelectorAll('[data-show-card]'));
+    var expGroups = Array.prototype.slice.call(explorer.querySelectorAll('[data-day-group]'));
+    var expStatus = explorer.querySelector('[data-explorer-status]');
+    var expMore = explorer.querySelector('[data-explorer-more]');
+    var expEmpty = explorer.querySelector('[data-explorer-empty]');
+    var expReset = explorer.querySelector('[data-explorer-reset]');
+
+    var activeCity = explorer.getAttribute('data-default-metro') || 'all';
+    var activeWhen = explorer.getAttribute('data-default-when') || 'this-week';
+
+    function syncExplorer() {
+      var visible = 0;
+      expCards.forEach(function (card) {
+        var cityOk = activeCity === 'all' || card.getAttribute('data-metro') === activeCity;
+        var whenOk = true;
+        if (activeWhen === 'weekend') whenOk = card.getAttribute('data-weekend') === '1';
+        else if (activeWhen === 'this-week') whenOk = card.getAttribute('data-this-week') === '1';
+        else if (activeWhen === 'next-week') whenOk = card.getAttribute('data-next-week') === '1';
+        var show = cityOk && whenOk;
+        card.hidden = !show;
+        if (show) visible++;
+      });
+
+      expGroups.forEach(function (g) {
+        var visInGroup = g.querySelectorAll('[data-show-card]:not([hidden])').length;
+        g.hidden = visInGroup === 0;
+        var countEl = g.querySelector('[data-day-count]');
+        if (countEl && visInGroup > 0) {
+          countEl.textContent = visInGroup + (visInGroup === 1 ? ' show' : ' shows');
+        }
+      });
+
+      if (expEmpty) expEmpty.hidden = visible > 0 || expCards.length === 0;
+
+      if (expStatus) {
+        expStatus.textContent = visible + (visible === 1 ? ' show' : ' shows');
+      }
+
+      var selectedCityBtn = cityBtns.find(function (b) { return b.getAttribute('data-city-btn') === activeCity; });
+      if (expMore && selectedCityBtn) {
+        var name = selectedCityBtn.getAttribute('data-metro-name') || '';
+        var total = selectedCityBtn.getAttribute('data-metro-total') || '';
+        var hubHref = selectedCityBtn.getAttribute('data-hub-href') || '/';
+        var wkHref = selectedCityBtn.getAttribute('data-weekend-href') || hubHref;
+        if (activeCity === 'all') {
+          expMore.href = hubHref;
+          expMore.textContent = 'Browse all venues →';
+        } else if (activeWhen === 'weekend') {
+          expMore.href = wkHref;
+          expMore.textContent = 'All ' + name + ' weekend shows →';
+        } else {
+          expMore.href = hubHref;
+          expMore.textContent = 'Full ' + name + ' calendar (' + total + ') →';
+        }
+      }
+    }
+
+    cityBtns.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        activeCity = btn.getAttribute('data-city-btn') || 'all';
+        cityBtns.forEach(function (b) { b.setAttribute('aria-pressed', b === btn ? 'true' : 'false'); });
+        syncExplorer();
+      });
+    });
+
+    whenBtns.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        activeWhen = btn.getAttribute('data-when-btn') || 'all';
+        whenBtns.forEach(function (b) { b.setAttribute('aria-pressed', b === btn ? 'true' : 'false'); });
+        syncExplorer();
+      });
+    });
+
+    if (expReset) {
+      expReset.addEventListener('click', function () {
+        activeWhen = 'all';
+        whenBtns.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-when-btn') === 'all' ? 'true' : 'false'); });
+        syncExplorer();
+      });
+    }
+
+    syncExplorer();
   }
 
   // Progressive Deezer 30-second preview lookup via JSONP (mirrors the Setnik app's src/lib/deezer.ts).

@@ -139,15 +139,56 @@ function buildCollections(routedShows, now) {
     showsByMetro.get(mId).push(s);
   }
 
-  // 1. Weekend hubs per metro (ordered with NYC, LA, Chicago first, then top 10 order)
+  // 1. Weekend hubs + date-bucket tags per metro (ordered with NYC, LA, Chicago first, then top 10 order)
   const weekendHubs = [];
+  const homeMetros = [];
+  const homeShows = [];
+  const homeSeen = new Set();
+
   for (const [mId, list] of showsByMetro.entries()) {
     const metro = getMetro(mId);
+    const today = localYmd(now, metro.tz);
+    const weekEnd = addDaysYmd(today, 6);
+    const nextWeekStart = addDaysYmd(today, 7);
+    const nextWeekEnd = addDaysYmd(today, 13);
     const range = getWeekendRange(now, metro.tz);
-    const wkShows = list.filter((s) => {
+
+    const wkShows = [];
+    const thisWeekBucket = [];
+    const nextWeekBucket = [];
+
+    for (const s of list) {
       const w = parseWallClock(s.startsAt);
-      return w && w.date >= range.start && w.date <= range.end;
-    });
+      const d = w?.date || '';
+      const isWeekend = Boolean(d && d >= range.start && d <= range.end);
+      const isThisWeek = Boolean(d && d >= today && d <= weekEnd);
+      const isNextWeek = Boolean(d && d >= nextWeekStart && d <= nextWeekEnd);
+      s.isWeekend = isWeekend;
+      s.isThisWeek = isThisWeek;
+      s.isNextWeek = isNextWeek;
+      if (isWeekend) wkShows.push(s);
+      if (isThisWeek) thisWeekBucket.push(s);
+      if (isNextWeek) nextWeekBucket.push(s);
+    }
+
+    // Balanced homepage slice per metro (fast HTML, guaranteed coverage for This Weekend, This Week, and Next Week)
+    const addHome = (arr, limit) => {
+      let added = 0;
+      for (const s of arr) {
+        if (added >= limit) break;
+        if (homeSeen.has(s.slug)) continue;
+        homeSeen.add(s.slug);
+        homeShows.push(s);
+        added++;
+      }
+    };
+    addHome(wkShows, 12);
+    addHome(thisWeekBucket, 14);
+    addHome(nextWeekBucket, 12);
+    if (wkShows.length + thisWeekBucket.length + nextWeekBucket.length === 0) {
+      addHome(list, 12);
+    }
+
     const slug = `${metro.slug}-shows-this-weekend`;
     weekendHubs.push({
       slug,
@@ -158,8 +199,20 @@ function buildCollections(routedShows, now) {
       dateRangeLabel: range.dateRangeLabel,
       shows: wkShows,
     });
+
+    homeMetros.push({
+      id: metro.id,
+      slug: metro.slug,
+      name: metro.name,
+      shortName: metro.shortName,
+      hubPath: `/${metro.slug}-live-music/`,
+      weekendPath: `/${slug}/`,
+      totalCount: list.length,
+    });
   }
   weekendHubs.sort((a, b) => metroRank(a.metro.id) - metroRank(b.metro.id) || b.shows.length - a.shows.length);
+  homeMetros.sort((a, b) => metroRank(a.id) - metroRank(b.id) || b.totalCount - a.totalCount);
+  homeShows.sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 
   // 2. City / Borough / Neighborhood hubs (e.g. /nyc-live-music/, /brooklyn-live-music/, /jersey-city-live-music/)
   const areaMap = new Map();
@@ -306,7 +359,7 @@ function buildCollections(routedShows, now) {
     (a, b) => b.shows.length - a.shows.length || a.name.localeCompare(b.name),
   );
 
-  return { weekendHubs, areaHubs, venues, genres };
+  return { weekendHubs, areaHubs, venues, genres, homeMetros, homeShows };
 }
 
 /** Build the complete static site into `outDir`. */
@@ -354,7 +407,7 @@ export async function buildSite({
   }
 
   const routedShows = assignRoutes(dataset.shows);
-  const { weekendHubs, areaHubs, venues, genres } = buildCollections(routedShows, now);
+  const { weekendHubs, areaHubs, venues, genres, homeMetros, homeShows } = buildCollections(routedShows, now);
 
   const ctx = {
     siteUrl,
@@ -383,7 +436,11 @@ export async function buildSite({
   };
 
   // 1. Homepage
-  writeOut(outDir, 'index.html', renderHomePage({ shows: routedShows, weekendHubs, areaHubs, venues, genres }, ctx));
+  writeOut(
+    outDir,
+    'index.html',
+    renderHomePage({ shows: routedShows, homeShows, homeMetros, weekendHubs, areaHubs, venues, genres }, ctx),
+  );
   registerUrl('/', 1.0, 'daily');
 
   // 2. Weekend hub pages
