@@ -83,11 +83,17 @@ function layout({
   jsonLdBlocks = [],
   activeNav = '',
   noindex = false,
+  ogImage = null,
+  ogImageAlt = null,
   body,
 }) {
   const { siteUrl, basePath, attribution, flags, generatedDate, googleSiteVerification } = ctx;
   const fullCanonical = canonicalUrl(siteUrl, canonicalPath);
   const ctaUrl = playStoreUrl(pageSlug);
+  const defaultOgImage = canonicalUrl(siteUrl, '/assets/og-card.png');
+  const resolvedOgImage = ogImage || defaultOgImage;
+  const isDefaultOgImage = resolvedOgImage === defaultOgImage;
+  const resolvedOgAlt = ogImageAlt || `${APP_NAME} — ${APP_TAGLINE} Local live music & 30-second band previews.`;
 
   const ldScripts = jsonLdBlocks
     .filter(Boolean)
@@ -112,9 +118,13 @@ function layout({
   <meta property="og:description" content="${description}">
   <meta property="og:type" content="website">
   <meta property="og:url" content="${fullCanonical}">
-  <meta name="twitter:card" content="summary">
+  <meta property="og:image" content="${resolvedOgImage}">
+  ${isDefaultOgImage ? raw('<meta property="og:image:width" content="1200">\n  <meta property="og:image:height" content="630">') : ''}
+  <meta property="og:image:alt" content="${resolvedOgAlt}">
+  <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="${title}">
   <meta name="twitter:description" content="${description}">
+  <meta name="twitter:image" content="${resolvedOgImage}">
   <link rel="icon" type="image/svg+xml" href="${href(basePath, '/assets/favicon.svg')}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -162,6 +172,18 @@ function layout({
       </div>
     </div>
   </footer>
+
+  <aside class="android-sticky-bar" data-android-bar hidden aria-label="Download Setnik on Android">
+    <div class="android-bar-inner">
+      <img class="android-bar-icon" src="${href(basePath, '/assets/favicon.svg')}" alt="" width="34" height="34" aria-hidden="true">
+      <div class="android-bar-copy">
+        <strong>Setnik for Android</strong>
+        <span>30s band previews &amp; one-tap calendar saves</span>
+      </div>
+      <a class="android-bar-cta" id="android-bar-cta-${slugify(pageSlug, 36)}" href="${ctaUrl}" rel="noopener">Get App</a>
+      <button type="button" class="android-bar-close" data-android-bar-close aria-label="Dismiss Android app banner">×</button>
+    </div>
+  </aside>
 
   <script src="${href(basePath, '/assets/player.js')}" defer></script>
 </body>
@@ -345,6 +367,7 @@ export function renderHomePage({ shows, homeShows = shows, homeMetros = [], week
                 class="filter-pill"
                 id="city-btn-${m.id}"
                 data-city-btn="${m.id}"
+                data-metro-slug="${m.slug}"
                 data-metro-name="${m.shortName}"
                 data-metro-total="${m.totalCount}"
                 data-hub-href="${href(basePath, m.hubPath)}"
@@ -356,6 +379,7 @@ export function renderHomePage({ shows, homeShows = shows, homeMetros = [], week
                 class="filter-pill"
                 id="city-btn-all"
                 data-city-btn="all"
+                data-metro-slug="all"
                 data-metro-name="all cities"
                 data-metro-total="${shows.length}"
                 data-hub-href="${href(basePath, '/venues/')}"
@@ -378,6 +402,7 @@ export function renderHomePage({ shows, homeShows = shows, homeMetros = [], week
             </div>
             <div class="explorer-meta">
               <span class="filter-status" data-explorer-status></span>
+              <button type="button" class="copy-link-btn" data-copy-filter-link aria-label="Copy shareable link to these filters">Share link</button>
               ${defaultMetro ? html`<a class="explorer-more-link" data-explorer-more href="${href(basePath, defaultMetro.hubPath)}">Full ${defaultMetro.shortName} calendar (${defaultMetro.totalCount}) →</a>` : ''}
             </div>
           </div>
@@ -504,7 +529,7 @@ export function renderWeekendHubPage(hub, relatedAreaHubs, ctx) {
 }
 
 /** 3. City / Borough / Neighborhood Hub Page (e.g. /brooklyn-live-music/, /jersey-city-live-music/) — NO Event JSON-LD! */
-export function renderAreaHubPage(hub, siblingHubs, topVenues, ctx) {
+export function renderAreaHubPage(hub, siblingHubs, topVenues, ctx, metroGenres = []) {
   const { siteUrl, basePath } = ctx;
   const crumbs = [
     { name: 'Home', path: '/', url: canonicalUrl(siteUrl, '/') },
@@ -537,6 +562,15 @@ export function renderAreaHubPage(hub, siblingHubs, topVenues, ctx) {
 
       ${renderFilterBar(hub.shows)}
       ${renderDateGroupedShows(hub.shows, ctx, `No upcoming shows listed in ${hub.label} right now.`)}
+
+      ${metroGenres.length ? html`<section class="section">
+        <div class="section-head">
+          <h2>Browse ${hub.metro.shortName} by Genre</h2>
+        </div>
+        <div class="tag-row">
+          ${metroGenres.map((cg) => html`<a class="tag" href="${href(basePath, cg.path)}">${cg.genreName} (${cg.shows.length})</a>`)}
+        </div>
+      </section>` : ''}
 
       ${topVenues.length ? html`<section class="section">
         <div class="section-head">
@@ -672,7 +706,7 @@ export function renderVenuesIndexPage(venues, ctx) {
 }
 
 /** 6. Genre Cluster Hub Page (e.g. /genres/punk/, /genres/shoegaze/) — NO Event JSON-LD! */
-export function renderGenrePage(genreObj, allGenres, ctx) {
+export function renderGenrePage(genreObj, allGenres, ctx, cityGenreHubs = []) {
   const { siteUrl, basePath } = ctx;
   const crumbs = [
     { name: 'Home', path: '/', url: canonicalUrl(siteUrl, '/') },
@@ -701,6 +735,15 @@ export function renderGenrePage(genreObj, allGenres, ctx) {
         </div>
       </section>
 
+      ${cityGenreHubs.length ? html`<section class="section" style="margin-top:0;margin-bottom:22px">
+        <div class="section-head">
+          <h2>${genreObj.name} Shows by City</h2>
+        </div>
+        <div class="directory-chips">
+          ${cityGenreHubs.map((cg) => html`<a class="dir-chip" href="${href(basePath, cg.path)}">${cg.metro.shortName} <span>${cg.shows.length}</span></a>`)}
+        </div>
+      </section>` : ''}
+
       ${renderDateGroupedShows(genreObj.shows, ctx, `No upcoming ${genreObj.name} shows are listed right now.`)}
 
       <section class="section">
@@ -713,6 +756,65 @@ export function renderGenrePage(genreObj, allGenres, ctx) {
       </section>
 
       ${renderCtaBanner(`genre-${genreObj.slug}`, `Filter by ${genreObj.name} and preview every band on Setnik.`)}
+    `,
+  });
+}
+
+/** 6b. City × Genre Hub Page (e.g. /nyc/electronic-shows/, /la/indie-rock-shows/) — NO Event JSON-LD! */
+export function renderCityGenrePage(hub, siblingGenresInCity = [], otherCitiesForGenre = [], ctx) {
+  const { siteUrl, basePath } = ctx;
+  const metroHubPath = `/${hub.metro.slug}-live-music/`;
+  const genreHubPath = `/genres/${hub.genreSlug}/`;
+  const crumbs = [
+    { name: 'Home', path: '/', url: canonicalUrl(siteUrl, '/') },
+    { name: `${hub.metro.shortName} Live Music`, path: metroHubPath, url: canonicalUrl(siteUrl, metroHubPath) },
+    { name: `${hub.genreName} Shows`, path: hub.path, url: canonicalUrl(siteUrl, hub.path) },
+  ];
+
+  return layout({
+    title: `${hub.metro.shortName} ${hub.genreName} Concerts & Live Shows (Next 30 Days) | ${APP_NAME}`,
+    description: `Browse ${hub.shows.length} upcoming ${hub.genreName} concerts in ${hub.metro.name} over the next 30 days. Hear 30-second band previews and swipe local ${hub.genreName} bills on ${APP_NAME}.`,
+    canonicalPath: hub.path,
+    pageSlug: hub.slug,
+    ctx,
+    jsonLdBlocks: [buildBreadcrumbJsonLd(crumbs)],
+    body: html`
+      ${renderBreadcrumbs(crumbs, basePath)}
+      <section class="hero">
+        <span class="kicker">Hyperlocal Genre Guide · ${hub.metro.name} · Next 30 Days</span>
+        <h1>${hub.metro.shortName} ${hub.genreName} Shows</h1>
+        <p class="lead">${hub.shows.length} upcoming ${hub.genreName} ${hub.shows.length === 1 ? 'concert' : 'concerts'} across ${hub.metro.name}. Tap any show for full lineups, venue details, and 30-second band previews.</p>
+        <div class="leaf-actions">
+          <a class="btn-primary" id="cg-cta-${hub.slug}" href="${playStoreUrl(hub.slug)}" rel="noopener">
+            ${playArrowIcon()} ${PRIMARY_CTA_LABEL}
+          </a>
+          <a class="btn-secondary" href="${href(basePath, metroHubPath)}">All ${hub.metro.shortName} shows</a>
+          <a class="btn-secondary" href="${href(basePath, genreHubPath)}">All ${hub.genreName} concerts</a>
+        </div>
+      </section>
+
+      ${renderFilterBar(hub.shows)}
+      ${renderDateGroupedShows(hub.shows, ctx, `No upcoming ${hub.genreName} shows are listed in ${hub.metro.shortName} right now.`)}
+
+      ${siblingGenresInCity.length ? html`<section class="section">
+        <div class="section-head">
+          <h2>More Genres in ${hub.metro.shortName}</h2>
+        </div>
+        <div class="tag-row">
+          ${siblingGenresInCity.map((cg) => html`<a class="tag" href="${href(basePath, cg.path)}">${cg.genreName} (${cg.shows.length})</a>`)}
+        </div>
+      </section>` : ''}
+
+      ${otherCitiesForGenre.length ? html`<section class="section">
+        <div class="section-head">
+          <h2>${hub.genreName} Shows in Other Cities</h2>
+        </div>
+        <div class="directory-chips">
+          ${otherCitiesForGenre.map((cg) => html`<a class="dir-chip" href="${href(basePath, cg.path)}">${cg.metro.shortName} <span>${cg.shows.length}</span></a>`)}
+        </div>
+      </section>` : ''}
+
+      ${renderCtaBanner(hub.slug, `Swipe ${hub.metro.shortName} ${hub.genreName} shows with 30-second previews.`)}
     `,
   });
 }
@@ -818,6 +920,8 @@ export function renderShowLeafPage(show, { sameVenueShows = [], sameNightShows =
       canonicalPath: show.pagePath,
       pageSlug: show.slug,
       ctx,
+      ogImage: posterUrl || null,
+      ogImageAlt: `${eventName} at ${show.venue.name} (${shortDateLabel})`,
       jsonLdBlocks: [musicEventLd, buildBreadcrumbJsonLd(crumbs)],
       body: html`
         ${renderBreadcrumbs(crumbs, basePath)}

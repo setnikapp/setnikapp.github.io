@@ -73,6 +73,7 @@ describe('setnik-web static site SEO & compliance', () => {
       assert.ok(fs.existsSync(path.join(tmpDir, 'assets/styles.css')));
       assert.ok(fs.existsSync(path.join(tmpDir, 'assets/player.js')));
       assert.ok(fs.existsSync(path.join(tmpDir, 'assets/favicon.svg')));
+      assert.ok(fs.existsSync(path.join(tmpDir, 'assets/og-card.png')), 'Branded OG share card must exist');
 
       // Expected hyperlocal hubs (priority NYC, LA, Chicago + Toronto Canada)
       assert.ok(fs.existsSync(path.join(tmpDir, 'nyc-shows-this-weekend/index.html')));
@@ -86,6 +87,20 @@ describe('setnik-web static site SEO & compliance', () => {
       assert.ok(fs.existsSync(path.join(tmpDir, 'venues/market-hotel/index.html')));
       assert.ok(fs.existsSync(path.join(tmpDir, 'venues/empty-bottle/index.html')));
       assert.ok(fs.existsSync(path.join(tmpDir, 'genres/punk/index.html')));
+
+      // Expected City × Genre SEO hub pages & internal cross-links
+      assert.ok(summary.cityGenreHubCount >= 2, `Expected City × Genre hubs, got ${summary.cityGenreHubCount}`);
+      assert.ok(fs.existsSync(path.join(tmpDir, 'nyc/indie-rock-shows/index.html')));
+      assert.ok(fs.existsSync(path.join(tmpDir, 'nyc/post-punk-shows/index.html')));
+      const nycHubHtml = fs.readFileSync(path.join(tmpDir, 'nyc-live-music/index.html'), 'utf8');
+      assert.ok(nycHubHtml.includes('/nyc/indie-rock-shows/'), 'NYC metro hub should cross-link to /nyc/indie-rock-shows/');
+      const indieGenreHtml = fs.readFileSync(path.join(tmpDir, 'genres/indie-rock/index.html'), 'utf8');
+      assert.ok(indieGenreHtml.includes('/nyc/indie-rock-shows/'), 'Indie Rock genre hub should cross-link to /nyc/indie-rock-shows/');
+
+      // Homepage shareable filter URL controls
+      const homeHtml = fs.readFileSync(path.join(tmpDir, 'index.html'), 'utf8');
+      assert.ok(homeHtml.includes('data-copy-filter-link'), 'Homepage should include Share link button');
+      assert.ok(homeHtml.includes('data-metro-slug="nyc"'), 'Homepage city buttons should include metro slug for shareable URLs');
 
       // Verify full per-metro JSON indices contain 100% of shows (zero homepage truncation)
       let totalInMetroJson = 0;
@@ -108,6 +123,7 @@ describe('setnik-web static site SEO & compliance', () => {
       const sitemapTxt = fs.readFileSync(path.join(tmpDir, 'sitemap.txt'), 'utf8');
       const txtUrls = sitemapTxt.trim().split('\n');
       assert.equal(txtUrls.length, summary.totalUrlsInSitemap);
+      assert.ok(txtUrls.includes(`${siteUrl}/nyc/indie-rock-shows/`), 'City × Genre hub must be registered in sitemap');
       for (const u of txtUrls) {
         assert.ok(u.startsWith(`${siteUrl}/`), `Expected absolute URL in sitemap.txt, got ${u}`);
         assert.ok(sitemapXml.includes(`<loc>${u}</loc>`), `Expected ${u} in sitemap.xml`);
@@ -139,6 +155,13 @@ describe('setnik-web static site SEO & compliance', () => {
         if (!isNotFound) {
           assert.ok(content.includes('<link rel="canonical" href="https://'), `Missing canonical tag in ${rel}`);
         }
+
+        // Branded Open Graph + Twitter large share card + Android-only sticky download bar on every page
+        assert.ok(content.includes('<meta property="og:image" content="https://'), `Missing og:image in ${rel}`);
+        assert.ok(content.includes('<meta name="twitter:card" content="summary_large_image">'), `Missing summary_large_image card in ${rel}`);
+        assert.ok(content.includes('<meta name="twitter:image" content="https://'), `Missing twitter:image in ${rel}`);
+        assert.ok(content.includes('data-android-bar hidden'), `Missing hidden Android sticky bar in ${rel}`);
+        assert.ok(content.includes('data-android-bar-close'), `Missing Android bar dismiss button in ${rel}`);
 
         // Primary Google Play UTM CTA present on every page with exact encoding
         const expectedPrefix = `https://play.google.com/store/apps/details?id=${GOOGLE_PLAY_PACKAGE_ID}&amp;referrer=utm_source%3Dsetnik_web%26utm_medium%3Dseo%26utm_campaign%3D`;

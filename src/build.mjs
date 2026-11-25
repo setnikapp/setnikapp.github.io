@@ -40,6 +40,7 @@ import { buildEventName } from './schema.mjs';
 import { buildRobotsTxt, buildSitemapTxt, buildSitemapXml } from './sitemaps.mjs';
 import {
   renderAreaHubPage,
+  renderCityGenrePage,
   renderGenrePage,
   renderGenresIndexPage,
   renderHomePage,
@@ -398,7 +399,40 @@ function buildCollections(routedShows, now) {
     (a, b) => b.shows.length - a.shows.length || a.name.localeCompare(b.name),
   );
 
-  return { weekendHubs, areaHubs, venues, genres, homeMetros, homeShows, metroPayloads };
+  // 5. City × Genre SEO hub pages (/{metro.slug}/{genre-slug}-shows/)
+  // Require >= 2 shows in priority metros (NYC/LA/Chicago) and >= 3 elsewhere to avoid thin pages.
+  const cityGenreHubs = [];
+  for (const [mId, list] of showsByMetro.entries()) {
+    const metro = getMetro(mId);
+    const minShows = PRIORITY_METROS.includes(mId) ? 2 : 3;
+    const byGenre = new Map();
+    for (const s of list) {
+      for (const g of s.genres || []) {
+        const gSlug = slugify(g, 40);
+        if (!byGenre.has(gSlug)) byGenre.set(gSlug, { name: g, slug: gSlug, shows: [] });
+        byGenre.get(gSlug).shows.push(s);
+      }
+    }
+    for (const gObj of byGenre.values()) {
+      if (gObj.shows.length < minShows) continue;
+      cityGenreHubs.push({
+        slug: `${metro.slug}-${gObj.slug}-shows`,
+        path: `/${metro.slug}/${gObj.slug}-shows/`,
+        metro,
+        genreName: gObj.name,
+        genreSlug: gObj.slug,
+        shows: gObj.shows,
+      });
+    }
+  }
+  cityGenreHubs.sort(
+    (a, b) =>
+      metroRank(a.metro.id) - metroRank(b.metro.id) ||
+      b.shows.length - a.shows.length ||
+      a.genreName.localeCompare(b.genreName),
+  );
+
+  return { weekendHubs, areaHubs, venues, genres, cityGenreHubs, homeMetros, homeShows, metroPayloads };
 }
 
 /** Build the complete static site into `outDir`. */
@@ -446,7 +480,7 @@ export async function buildSite({
   }
 
   const routedShows = assignRoutes(dataset.shows);
-  const { weekendHubs, areaHubs, venues, genres, homeMetros, homeShows, metroPayloads } = buildCollections(routedShows, now);
+  const { weekendHubs, areaHubs, venues, genres, cityGenreHubs, homeMetros, homeShows, metroPayloads } = buildCollections(routedShows, now);
 
   const ctx = {
     siteUrl,
@@ -497,7 +531,10 @@ export async function buildSite({
     const siblings = areaHubs.filter((a) => a.slug !== hub.slug && a.metro.id === hub.metro.id).slice(0, 10);
     const hubVenueSlugs = new Set(hub.shows.map((s) => s.venueSlug));
     const hubVenues = venues.filter((v) => hubVenueSlugs.has(v.slug)).slice(0, 8);
-    writeOut(outDir, path.join(hub.slug, 'index.html'), renderAreaHubPage(hub, siblings, hubVenues, ctx));
+    const metroGenres = hub.priority === 1
+      ? cityGenreHubs.filter((cg) => cg.metro.id === hub.metro.id)
+      : [];
+    writeOut(outDir, path.join(hub.slug, 'index.html'), renderAreaHubPage(hub, siblings, hubVenues, ctx, metroGenres));
     registerUrl(hub.path, PRIORITY_METROS.includes(hub.metro.id) ? 0.8 : 0.7, 'daily');
   }
 
@@ -513,8 +550,21 @@ export async function buildSite({
   writeOut(outDir, path.join('genres', 'index.html'), renderGenresIndexPage(genres, ctx));
   registerUrl('/genres/', 0.7, 'daily');
   for (const g of genres) {
-    writeOut(outDir, path.join('genres', g.slug, 'index.html'), renderGenrePage(g, genres, ctx));
+    const matchingCityGenres = cityGenreHubs.filter((cg) => cg.genreSlug === g.slug);
+    writeOut(outDir, path.join('genres', g.slug, 'index.html'), renderGenrePage(g, genres, ctx, matchingCityGenres));
     registerUrl(g.path, 0.7, 'daily');
+  }
+
+  // 5b. City × Genre SEO hub pages (/{metro.slug}/{genre-slug}-shows/)
+  for (const cg of cityGenreHubs) {
+    const siblingGenresInCity = cityGenreHubs.filter((other) => other.metro.id === cg.metro.id && other.genreSlug !== cg.genreSlug);
+    const otherCitiesForGenre = cityGenreHubs.filter((other) => other.genreSlug === cg.genreSlug && other.metro.id !== cg.metro.id);
+    writeOut(
+      outDir,
+      path.join(cg.metro.slug, `${cg.genreSlug}-shows`, 'index.html'),
+      renderCityGenrePage(cg, siblingGenresInCity, otherCitiesForGenre, ctx),
+    );
+    registerUrl(cg.path, PRIORITY_METROS.includes(cg.metro.id) ? 0.8 : 0.7, 'daily');
   }
 
   // 6. Individual Show Leaf Pages (with gated MusicEvent JSON-LD)
@@ -557,6 +607,7 @@ export async function buildSite({
     areaHubCount: areaHubs.length,
     venueCount: venues.length,
     genreCount: genres.length,
+    cityGenreHubCount: cityGenreHubs.length,
     totalUrlsInSitemap: sitemapEntries.length,
     warnings: dataset.warnings,
     flags: dataset.flags,
@@ -565,7 +616,7 @@ export async function buildSite({
   log.info?.(
     `[setnik-web] Built ${summary.totalUrlsInSitemap} pages into ${outDir} ` +
     `(${summary.totalShows} shows: ${summary.musicEventSchemaCount} with MusicEvent JSON-LD, ${summary.skippedSchemaCount} without street address; ` +
-    `${summary.weekendHubCount} weekend hubs, ${summary.areaHubCount} area hubs, ${summary.venueCount} venues, ${summary.genreCount} genres).`,
+    `${summary.weekendHubCount} weekend hubs, ${summary.areaHubCount} area hubs, ${summary.venueCount} venues, ${summary.genreCount} genres, ${summary.cityGenreHubCount} city×genre hubs).`,
   );
 
   return summary;
