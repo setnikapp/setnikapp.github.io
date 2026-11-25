@@ -59,6 +59,21 @@ function playArrowIcon() {
   return raw(`<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.14v13.72a1 1 0 0 0 1.53.85l11-6.86a1 1 0 0 0 0-1.7l-11-6.86A1 1 0 0 0 8 5.14Z"/></svg>`);
 }
 
+function googlePlayBadge(url, id = 'play-badge-home') {
+  return html`<a class="play-badge" id="${id}" href="${url}" rel="noopener" aria-label="Get Setnik on Google Play">
+    <svg class="play-badge-icon" width="22" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M3.6 2.3C3.2 2.7 3 3.3 3 4.1V19.9C3 20.7 3.2 21.3 3.6 21.7L3.7 21.8L12.7 12.8V12.6V12.4L3.7 3.4L3.6 2.3Z" fill="#4285F4"/>
+      <path d="M15.7 15.8L12.7 12.8V12.6V12.4L15.7 9.4L15.8 9.5L19.4 11.5C20.4 12.1 20.4 13.1 19.4 13.7L15.8 15.7L15.7 15.8Z" fill="#FBBC04"/>
+      <path d="M15.8 15.7L12.7 12.6L3.6 21.7C3.9 22.1 4.5 22.1 5.2 21.7L15.8 15.7Z" fill="#EA4335"/>
+      <path d="M15.8 9.5L5.2 3.5C4.5 3.1 3.9 3.1 3.6 3.5L12.7 12.6L15.8 9.5Z" fill="#34A853"/>
+    </svg>
+    <span class="play-badge-copy">
+      <span class="play-badge-sub">GET IT ON</span>
+      <span class="play-badge-main">Google Play</span>
+    </span>
+  </a>`;
+}
+
 function layout({
   title,
   description,
@@ -210,6 +225,10 @@ function renderShowCard(show, ctx) {
   return html`<li
     class="show-card"
     data-show-card
+    data-metro="${show.venue.metro || 'nyc'}"
+    data-weekend="${show.isWeekend ? '1' : '0'}"
+    data-this-week="${show.isThisWeek ? '1' : '0'}"
+    data-next-week="${show.isNextWeek ? '1' : '0'}"
     data-genres="${(show.genres || []).map((g) => slugify(g)).join('|')}"
     data-free="${show.price?.isFree ? '1' : '0'}"
     data-price="${typeof show.price?.min === 'number' ? show.price.min : ''}"
@@ -280,7 +299,7 @@ function renderDateGroupedShows(shows, ctx, emptyMessage = 'No upcoming shows ar
   return html`${groups.map(([ymd, items]) => html`<section class="day-group" data-day-group>
     <h2 class="day-heading">
       <span>${ymd !== 'unknown' ? formatLongDate(ymd) : 'Upcoming'}</span>
-      <span class="day-count">${items.length} ${items.length === 1 ? 'show' : 'shows'}</span>
+      <span class="day-count" data-day-count>${items.length} ${items.length === 1 ? 'show' : 'shows'}</span>
     </h2>
     <ul class="show-list">
       ${items.map((s) => renderShowCard(s, ctx))}
@@ -288,109 +307,108 @@ function renderDateGroupedShows(shows, ctx, emptyMessage = 'No upcoming shows ar
   </section>`)}`;
 }
 
-/** 1. Homepage (/) — High-intent hyperlocal hub directory + upcoming bills */
-export function renderHomePage({ shows, weekendHubs, areaHubs, venues, genres }, ctx) {
+/** 1. Homepage (/) — Compact logo + tagline + Google Play badge, then immediate City & Date filtered listings */
+export function renderHomePage({ shows, homeShows = shows, homeMetros = [], weekendHubs, areaHubs, venues, genres }, ctx) {
   const { siteUrl, basePath } = ctx;
   const pageSlug = 'home';
-  const priorityShows = shows.filter((s) => PRIORITY_METROS.includes(s.venue.metro));
-  const featuredShows = (priorityShows.length >= 6 ? priorityShows : shows).slice(0, 12);
-  // Show all 10 metro hubs plus top priority borough/city hubs on the homepage (sub-neighborhoods are linked inside each metro hub)
+  const defaultMetro = homeMetros[0] || null;
+  const listings = homeShows && homeShows.length ? homeShows : shows.slice(0, 30);
   const homeAreaHubs = areaHubs.filter((h) => h.priority <= 2 || (h.priority === 3 && h.metro.id === 'nyc')).slice(0, 16);
-  const topVenues = venues.slice(0, 12);
-  const topGenres = genres.slice(0, 12);
+  const topVenues = venues.slice(0, 10);
+  const topGenres = genres.slice(0, 14);
 
   return layout({
     title: `${APP_NAME} — Local Live Music, Indie Concerts & Band Previews`,
-    description: `Discover upcoming local concerts and live music near you across major US & Canadian cities. Browse next 30 days of shows by city, neighborhood, venue, and genre, preview bands in 30 seconds, and swipe bills on Setnik.`,
+    description: `Discover upcoming local concerts and live music near you across major US & Canadian cities. Browse shows this weekend, this week, and next week, hear 30-second band previews, and swipe bills on Setnik.`,
     canonicalPath: '/',
     pageSlug,
     ctx,
     activeNav: 'home',
     jsonLdBlocks: [buildWebSiteJsonLd(siteUrl)],
     body: html`
-      <section class="hero">
-        <div class="hero-grid">
-          <div>
-            <span class="kicker">Live Music Discovery · Next 30 Days</span>
-            <h1>Find local concerts worth leaving the house for.</h1>
-            <p class="lead">Browse upcoming club shows, indie bills, and neighborhood calendars updated daily — then listen to 30-second previews of every band on Setnik before you commit.</p>
-            <div class="hero-stats">
-              <div class="stat-box">
-                <span class="stat-num">${shows.length}</span>
-                <span class="stat-label">Upcoming shows</span>
-              </div>
-              <div class="stat-box">
-                <span class="stat-num">${venues.length}</span>
-                <span class="stat-label">Local venues</span>
-              </div>
-              <div class="stat-box">
-                <span class="stat-num">${genres.length}</span>
-                <span class="stat-label">Genres tracked</span>
-              </div>
-            </div>
-          </div>
-          <div class="cta-box">
-            <span class="kicker">Android App · Free</span>
-            <h2>Hear it. Press play. Go there.</h2>
-            <p>Swipe tonight’s and this weekend’s local bills with instant 30-second artist previews. One swipe saves shows to your calendar.</p>
-            <a class="btn-primary" id="hero-cta-play" href="${playStoreUrl(pageSlug)}" rel="noopener">
-              ${playArrowIcon()} ${PRIMARY_CTA_LABEL}
-            </a>
-            <span class="cta-note">Free on Google Play · No account required to swipe</span>
-          </div>
+      <section class="home-banner">
+        <div class="home-banner-brand">
+          <h1 class="home-banner-title">
+            <img class="home-banner-logo" src="${href(basePath, '/assets/wordmark.png')}" alt="Setnik" width="166" height="36" decoding="async">
+            <span class="sr-only"> — Local Concerts &amp; Live Music</span>
+          </h1>
+          <p class="home-banner-tagline">${APP_TAGLINE} Swipe local shows with 30-second band previews.</p>
+        </div>
+        <div class="home-banner-cta">
+          ${googlePlayBadge(playStoreUrl(pageSlug), 'hero-play-badge')}
         </div>
       </section>
 
-      ${weekendHubs.length ? html`<section class="section">
-        <div class="section-head">
-          <h2>Shows This Weekend</h2>
-        </div>
-        <div class="hub-grid">
-          ${weekendHubs.map((hub) => html`<a class="hub-card" href="${href(basePath, hub.path)}">
-            <div>
-              <span class="hub-card-title">${hub.shortTitle}</span>
-              <div class="hub-card-meta">${hub.dateRangeLabel} · ${hub.shows.length} ${hub.shows.length === 1 ? 'show' : 'shows'}</div>
+      <section class="home-explorer" data-home-explorer data-default-metro="${defaultMetro ? defaultMetro.id : 'all'}" data-default-when="this-week">
+        ${homeMetros.length ? html`<div class="explorer-controls" role="region" aria-label="Filter upcoming shows by city and date">
+          <div class="filter-row" role="group" aria-label="City">
+            <span class="filter-label">City</span>
+            <div class="filter-pills">
+              ${homeMetros.map((m, idx) => html`<button
+                type="button"
+                class="filter-pill"
+                id="city-btn-${m.id}"
+                data-city-btn="${m.id}"
+                data-metro-name="${m.shortName}"
+                data-metro-total="${m.totalCount}"
+                data-hub-href="${href(basePath, m.hubPath)}"
+                data-weekend-href="${href(basePath, m.weekendPath)}"
+                aria-pressed="${idx === 0 ? 'true' : 'false'}"
+              >${m.shortName}</button>`)}
+              ${homeMetros.length > 1 ? html`<button
+                type="button"
+                class="filter-pill"
+                id="city-btn-all"
+                data-city-btn="all"
+                data-metro-name="all cities"
+                data-metro-total="${shows.length}"
+                data-hub-href="${href(basePath, '/venues/')}"
+                data-weekend-href="${href(basePath, weekendHubs[0]?.path || '/')}"
+                aria-pressed="false"
+              >All</button>` : ''}
             </div>
-            <span class="hub-card-cta">See weekend bills →</span>
-          </a>`)}
+          </div>
+
+          <div class="filter-row filter-row-date" role="group" aria-label="Date">
+            <span class="filter-label">When</span>
+            <div class="filter-pills">
+              <button type="button" class="filter-pill" id="when-btn-weekend" data-when-btn="weekend" aria-pressed="false">This Weekend</button>
+              <button type="button" class="filter-pill" id="when-btn-this-week" data-when-btn="this-week" aria-pressed="true">This Week</button>
+              <button type="button" class="filter-pill" id="when-btn-next-week" data-when-btn="next-week" aria-pressed="false">Next Week</button>
+              <button type="button" class="filter-pill" id="when-btn-all" data-when-btn="all" aria-pressed="false">All</button>
+            </div>
+            <div class="explorer-meta">
+              <span class="filter-status" data-explorer-status></span>
+              ${defaultMetro ? html`<a class="explorer-more-link" data-explorer-more href="${href(basePath, defaultMetro.hubPath)}">Full ${defaultMetro.shortName} calendar (${defaultMetro.totalCount}) →</a>` : ''}
+            </div>
+          </div>
+        </div>` : ''}
+
+        <div data-explorer-list>
+          ${renderDateGroupedShows(listings, ctx, 'Fresh listings sync daily at 6:00 AM EST. Check back shortly or open Setnik on Android.')}
         </div>
-      </section>` : ''}
+        <div class="empty-state" data-explorer-empty hidden>
+          <p>No shows match that city and date window yet.</p>
+          <p><button type="button" class="btn-secondary" data-explorer-reset>Show all upcoming in this city</button></p>
+        </div>
+      </section>
 
       ${homeAreaHubs.length ? html`<section class="section">
         <div class="section-head">
-          <h2>Browse by City &amp; Neighborhood</h2>
+          <h2>Cities &amp; Neighborhoods</h2>
         </div>
-        <div class="hub-grid">
-          ${homeAreaHubs.map((hub) => html`<a class="hub-card" href="${href(basePath, hub.path)}">
-            <div>
-              <span class="hub-card-title">${hub.label}</span>
-              <div class="hub-card-meta">${hub.shows.length} upcoming ${hub.shows.length === 1 ? 'show' : 'shows'}</div>
-            </div>
-            <span class="hub-card-cta">Explore live music →</span>
-          </a>`)}
+        <div class="directory-chips">
+          ${homeAreaHubs.map((hub) => html`<a class="dir-chip" href="${href(basePath, hub.path)}">${hub.label} <span>${hub.shows.length}</span></a>`)}
         </div>
       </section>` : ''}
-
-      <section class="section">
-        <div class="section-head">
-          <h2>Coming Up Next</h2>
-        </div>
-        ${renderDateGroupedShows(featuredShows, ctx, 'Fresh listings sync daily at 6:00 AM EST. Check back shortly or open Setnik on Android.')}
-      </section>
 
       ${topVenues.length ? html`<section class="section">
         <div class="section-head">
           <h2>Popular Venues</h2>
           <a class="section-more" href="${href(basePath, '/venues/')}">All ${venues.length} venues →</a>
         </div>
-        <div class="hub-grid">
-          ${topVenues.map((v) => html`<a class="hub-card" href="${href(basePath, v.path)}">
-            <div>
-              <span class="hub-card-title">${v.name}</span>
-              <div class="hub-card-meta">${v.neighborhood || v.area} · ${v.shows.length} upcoming ${v.shows.length === 1 ? 'show' : 'shows'}</div>
-            </div>
-            <span class="hub-card-cta">Venue schedule →</span>
-          </a>`)}
+        <div class="directory-chips">
+          ${topVenues.map((v) => html`<a class="dir-chip" href="${href(basePath, v.path)}">${v.name} <span>${v.shows.length}</span></a>`)}
         </div>
       </section>` : ''}
 
