@@ -126,16 +126,13 @@ function layout({
   <a class="skip-link" href="#main-content">Skip to concert listings</a>
   <header class="site-header">
     <div class="wrap header-inner">
-      <a class="brand-link" href="${href(basePath, '/')}" aria-label="${APP_NAME} — ${APP_TAGLINE}">
-        ${wordmarkImg(basePath)}
-      </a>
-      <nav class="site-nav" aria-label="Primary">
-        <a href="${href(basePath, '/')}" ${activeNav === 'home' ? raw('aria-current="page"') : ''}>Shows</a>
-        ${ctx.primaryWeekendHub ? html`<a href="${href(basePath, ctx.primaryWeekendHub.path)}" ${activeNav === 'weekend' ? raw('aria-current="page"') : ''}>This Weekend</a>` : ''}
-        <a href="${href(basePath, '/venues/')}" ${activeNav === 'venues' ? raw('aria-current="page"') : ''}>Venues</a>
-        <a href="${href(basePath, '/genres/')}" ${activeNav === 'genres' ? raw('aria-current="page"') : ''}>Genres</a>
-        <a class="nav-cta" href="${ctaUrl}" rel="noopener">${playArrowIcon()} Get Setnik</a>
-      </nav>
+      <div class="header-brand">
+        <a class="brand-link" href="${href(basePath, '/')}" aria-label="${APP_NAME} — ${APP_TAGLINE}">
+          ${wordmarkImg(basePath)}
+        </a>
+        <p class="header-tagline">${APP_TAGLINE} Local concerts with 30-second band previews.</p>
+      </div>
+      ${googlePlayBadge(ctaUrl, 'header-play-badge')}
     </div>
   </header>
 
@@ -339,19 +336,7 @@ export function renderHomePage({ shows, homeShows = shows, homeMetros = [], week
     activeNav: 'home',
     jsonLdBlocks: [buildWebSiteJsonLd(siteUrl)],
     body: html`
-      <section class="home-banner">
-        <div class="home-banner-brand">
-          <h1 class="home-banner-title">
-            <img class="home-banner-logo" src="${href(basePath, '/assets/wordmark.png')}" alt="Setnik" width="166" height="36" decoding="async">
-            <span class="sr-only"> — Local Concerts &amp; Live Music</span>
-          </h1>
-          <p class="home-banner-tagline">${APP_TAGLINE} Swipe local shows with 30-second band previews.</p>
-        </div>
-        <div class="home-banner-cta">
-          ${googlePlayBadge(playStoreUrl(pageSlug), 'hero-play-badge')}
-        </div>
-      </section>
-
+      <h1 class="sr-only">${APP_NAME} — Local Concerts &amp; Live Music</h1>
       <section class="home-explorer" data-home-explorer data-default-metro="${defaultMetro ? defaultMetro.id : 'all'}" data-default-when="this-week">
         ${homeMetros.length ? html`<div class="explorer-controls" role="region" aria-label="Filter upcoming shows by city, date, and genre">
           <div class="filter-row" role="group" aria-label="City">
