@@ -34,6 +34,7 @@ import {
   formatWeekdayShort,
   localYmd,
   parseWallClock,
+  safeWebUrl,
   slugify,
 } from './html.mjs';
 import { buildEventName } from './schema.mjs';
@@ -180,12 +181,20 @@ function buildCollections(routedShows, now) {
       if (isWeekend) wkShows.push(s);
 
       const acts = [...(s.acts || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      const headAct = acts[0] || null;
       const supports = s.title ? acts.map((a) => a.name) : acts.slice(1).map((a) => a.name);
       const supportsLine = supports.length ? `${s.title ? 'Featuring' : 'With'} ${supports.join(', ')}` : '';
+      const directPreview = safeWebUrl(headAct?.previewUrl || s.previewUrl || null) || '';
+      const deezerId = headAct?.links?.deezerArtistId ? String(headAct.links.deezerArtistId) : '';
+      const venueLoc = s.venue.addressVisibility === 'public' && s.venue.address
+        ? s.venue.address
+        : [s.venue.neighborhood || s.venue.area, s.venue.city].filter(Boolean).join(', ');
 
-      serializedShows.push({
+      const item = {
         p: s.pagePath,
+        sl: s.slug,
         n: buildEventName(s),
+        hn: headAct?.name || buildEventName(s),
         sup: supportsLine,
         d,
         dl: d ? formatLongDate(d) : 'Upcoming',
@@ -193,9 +202,11 @@ function buildCollections(routedShows, now) {
         dy: d ? formatDayNum(d) : '—',
         dw: d ? formatWeekdayShort(d) : '',
         t: formatShowTime(s),
+        sa: s.startsAt || '',
         v: s.venue.name,
         vp: s.venuePath,
         nb: s.venue.neighborhood || s.venue.area || '',
+        vl: venueLoc,
         m: metro.id,
         g: (s.genres || []).map((g) => [g, slugify(g, 40)]),
         pr: formatPrice(s.price),
@@ -207,7 +218,10 @@ function buildCollections(routedShows, now) {
         wk: isWeekend ? 1 : 0,
         tw: isThisWeek ? 1 : 0,
         nw: isNextWeek ? 1 : 0,
-      });
+      };
+      if (directPreview) item.pv = directPreview;
+      if (deezerId) item.dz = deezerId;
+      serializedShows.push(item);
     }
 
     metroPayloads.set(metro.id, {

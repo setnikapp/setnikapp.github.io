@@ -97,12 +97,16 @@ describe('setnik-web static site SEO & compliance', () => {
       const indieGenreHtml = fs.readFileSync(path.join(tmpDir, 'genres/indie-rock/index.html'), 'utf8');
       assert.ok(indieGenreHtml.includes('/nyc/indie-rock-shows/'), 'Indie Rock genre hub should cross-link to /nyc/indie-rock-shows/');
 
-      // Homepage shareable filter URL controls
+      // Homepage shareable filter URL controls & in-list Preview/Save triggers
       const homeHtml = fs.readFileSync(path.join(tmpDir, 'index.html'), 'utf8');
       assert.ok(homeHtml.includes('data-copy-filter-link'), 'Homepage should include Share link button');
       assert.ok(homeHtml.includes('data-metro-slug="nyc"'), 'Homepage city buttons should include metro slug for shareable URLs');
+      assert.ok(homeHtml.includes('data-row-preview'), 'Homepage listing rows should include in-list Preview trigger');
+      assert.ok(homeHtml.includes('data-row-save'), 'Homepage listing rows should include in-list Save trigger');
+      assert.ok(homeHtml.includes('data-row-feedback'), 'Homepage listing rows should include inline feedback slot');
+      assert.ok(nycHubHtml.includes('data-row-preview') && nycHubHtml.includes('data-row-save'), 'Hub listing rows should include in-list Preview & Save triggers');
 
-      // Verify full per-metro JSON indices contain 100% of shows (zero homepage truncation)
+      // Verify full per-metro JSON indices contain 100% of shows + preview/calendar metadata
       let totalInMetroJson = 0;
       for (const mId of ['nyc', 'la', 'chi', 'tor']) {
         const jsonPath = path.join(tmpDir, 'data', `${mId}.json`);
@@ -110,6 +114,7 @@ describe('setnik-web static site SEO & compliance', () => {
         const payload = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
         assert.equal(payload.metro, mId);
         assert.ok(Array.isArray(payload.shows) && payload.shows.length > 0);
+        assert.ok(payload.shows[0].hn && payload.shows[0].sa && payload.shows[0].sl, `Missing hn/sa/sl in data/${mId}.json`);
         totalInMetroJson += payload.shows.length;
       }
       assert.equal(totalInMetroJson, summary.totalShows);
@@ -298,6 +303,10 @@ describe('setnik-web static site SEO & compliance', () => {
       assert.ok(!leafHtml.includes('<script>alert(1)</script>'), 'Raw <script> tag must be escaped');
       assert.ok(leafHtml.includes('&lt;script&gt;alert(1)&lt;/script&gt;'), 'Escaped text should appear safely');
       assert.ok(!leafHtml.includes('data-preview-btn'), 'Deezer preview button must be hidden when deezer_enabled is false');
+      const homeHtml = fs.readFileSync(path.join(tmpDir, 'index.html'), 'utf8');
+      assert.ok(!homeHtml.includes('data-row-preview'), 'In-list Deezer preview button must be hidden when deezer_enabled is false');
+      assert.ok(homeHtml.includes('data-deezer-enabled="0"'), 'Explorer should propagate deezer_enabled=0');
+      assert.ok(homeHtml.includes('data-row-save'), 'In-list Save trigger should still render when deezer_enabled is false');
       // Verify JSON-LD still parses cleanly even with <script> inside strings
       const blocks = extractJsonLdBlocks(leafHtml);
       assert.equal(blocks.length, 2);
