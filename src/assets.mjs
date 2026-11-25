@@ -156,37 +156,10 @@ main {
   color: var(--text);
 }
 
-.wordmark {
-  display: inline-flex;
-  align-items: flex-end;
-  gap: 2.5px;
-  line-height: 1;
-}
-
-.wordmark-text {
-  font-family: var(--font-display);
-  font-size: 29px;
-  line-height: 0.88;
-  letter-spacing: 0.04em;
-  color: var(--text);
-}
-
-.wordmark-meter {
-  width: 8px;
-  height: 25px;
+.brand-wordmark {
+  height: 26px;
+  width: auto;
   display: block;
-  margin: 0 1px 0.5px;
-  flex-shrink: 0;
-}
-
-.wordmark-dot {
-  width: 5.5px;
-  height: 5.5px;
-  background: var(--accent);
-  display: inline-block;
-  margin-left: 1px;
-  margin-bottom: 1px;
-  flex-shrink: 0;
 }
 
 .site-nav {

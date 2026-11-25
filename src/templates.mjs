@@ -48,20 +48,11 @@ import {
 } from './schema.mjs';
 
 /**
- * Custom vector SETNIK. wordmark matching SETNIK_brand_spec_v1.1.pdf (p. 2):
- * Bold condensed uppercase with stacked LED VU-meter "I" (top square Clip Red #E4574E)
- * and matching Clip Red square period.
+ * Official SETNIK. wordmark PNG (900x195, exact 60:13 aspect ratio) with the
+ * LED VU-meter "I" between N and K and matching Clip Red period.
  */
-function wordmarkSvg() {
-  return raw(`<span class="wordmark" aria-label="SETNIK.">
-  <span class="wordmark-text">SET</span><svg class="wordmark-meter" viewBox="0 0 9 29" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-    <rect x="0.5" y="0.5" width="8" height="4.4" fill="#E4574E"/>
-    <rect x="0.5" y="6.4" width="8" height="4.4" fill="#141414"/>
-    <rect x="0.5" y="12.3" width="8" height="4.4" fill="#141414"/>
-    <rect x="0.5" y="18.2" width="8" height="4.4" fill="#141414"/>
-    <rect x="0.5" y="24.1" width="8" height="4.4" fill="#141414"/>
-  </svg><span class="wordmark-text">NIK</span><span class="wordmark-dot" aria-hidden="true"></span>
-</span>`);
+function wordmarkImg(basePath) {
+  return html`<img class="brand-wordmark" src="${href(basePath, '/assets/wordmark.png')}" alt="SETNIK." width="120" height="26" decoding="async">`;
 }
 
 function playArrowIcon() {
@@ -121,7 +112,7 @@ function layout({
   <header class="site-header">
     <div class="wrap header-inner">
       <a class="brand-link" href="${href(basePath, '/')}" aria-label="${APP_NAME} — ${APP_TAGLINE}">
-        ${wordmarkSvg()}
+        ${wordmarkImg(basePath)}
       </a>
       <nav class="site-nav" aria-label="Primary">
         <a href="${href(basePath, '/')}" ${activeNav === 'home' ? raw('aria-current="page"') : ''}>Shows</a>
