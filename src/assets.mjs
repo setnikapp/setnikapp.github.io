@@ -424,6 +424,48 @@ h3 {
   text-decoration: underline;
 }
 
+.custom-dates-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.custom-dates-bar[hidden] {
+  display: none;
+}
+
+.date-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.date-input {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  padding: 5px 9px;
+}
+
+.date-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* Compact directory links below listings */
 .directory-chips {
   display: flex;
@@ -1271,12 +1313,15 @@ export function buildPlayerJs() {
     });
   }
 
-  // Homepage City + Date (This Weekend / This Week / Next Week / All) + Genre instant filter controller.
+  // Homepage City + Date (Tonight / Tomorrow Night / This Weekend / This Week / Next Week / Custom Dates / All) + Genre instant filter controller.
   var explorer = document.querySelector('[data-home-explorer]');
   if (explorer) {
     var cityBtns = Array.prototype.slice.call(explorer.querySelectorAll('[data-city-btn]'));
     var whenBtns = Array.prototype.slice.call(explorer.querySelectorAll('[data-when-btn]'));
     var genreBtns = Array.prototype.slice.call(explorer.querySelectorAll('[data-genre-btn]'));
+    var customBar = explorer.querySelector('[data-custom-dates]');
+    var dateFromInput = explorer.querySelector('[data-date-from]');
+    var dateToInput = explorer.querySelector('[data-date-to]');
     var expCards = Array.prototype.slice.call(explorer.querySelectorAll('[data-show-card]'));
     var expGroups = Array.prototype.slice.call(explorer.querySelectorAll('[data-day-group]'));
     var expStatus = explorer.querySelector('[data-explorer-status]');
@@ -1288,14 +1333,33 @@ export function buildPlayerJs() {
     var activeWhen = explorer.getAttribute('data-default-when') || 'this-week';
     var activeGenre = 'all';
 
+    // Default custom "To" date to +7 days from "From"
+    if (dateFromInput && dateToInput && dateFromInput.value) {
+      var d0 = new Date(dateFromInput.value + 'T12:00:00Z');
+      if (!Number.isNaN(d0.getTime())) {
+        d0.setUTCDate(d0.getUTCDate() + 7);
+        dateToInput.value = d0.toISOString().slice(0, 10);
+      }
+    }
+
     function syncExplorer() {
+      if (customBar) customBar.hidden = activeWhen !== 'custom';
+      var customFrom = dateFromInput ? dateFromInput.value : '';
+      var customTo = dateToInput ? dateToInput.value : '';
+
       var visible = 0;
       expCards.forEach(function (card) {
         var cityOk = activeCity === 'all' || card.getAttribute('data-metro') === activeCity;
         var whenOk = true;
-        if (activeWhen === 'weekend') whenOk = card.getAttribute('data-weekend') === '1';
+        if (activeWhen === 'tonight') whenOk = card.getAttribute('data-tonight') === '1';
+        else if (activeWhen === 'tomorrow') whenOk = card.getAttribute('data-tomorrow') === '1';
+        else if (activeWhen === 'weekend') whenOk = card.getAttribute('data-weekend') === '1';
         else if (activeWhen === 'this-week') whenOk = card.getAttribute('data-this-week') === '1';
         else if (activeWhen === 'next-week') whenOk = card.getAttribute('data-next-week') === '1';
+        else if (activeWhen === 'custom') {
+          var cd = card.getAttribute('data-date') || '';
+          whenOk = Boolean(cd && (!customFrom || cd >= customFrom) && (!customTo || cd <= customTo));
+        }
         var genreOk = activeGenre === 'all' || (card.getAttribute('data-genres') || '').split('|').indexOf(activeGenre) !== -1;
         var show = cityOk && whenOk && genreOk;
         card.hidden = !show;
@@ -1351,6 +1415,23 @@ export function buildPlayerJs() {
         syncExplorer();
       });
     });
+
+    if (dateFromInput) {
+      dateFromInput.addEventListener('change', function () {
+        if (dateToInput && dateToInput.value && dateFromInput.value && dateToInput.value < dateFromInput.value) {
+          dateToInput.value = dateFromInput.value;
+        }
+        syncExplorer();
+      });
+    }
+    if (dateToInput) {
+      dateToInput.addEventListener('change', function () {
+        if (dateFromInput && dateFromInput.value && dateToInput.value && dateToInput.value < dateFromInput.value) {
+          dateFromInput.value = dateToInput.value;
+        }
+        syncExplorer();
+      });
+    }
 
     genreBtns.forEach(function (btn) {
       btn.addEventListener('click', function () {
