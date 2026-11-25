@@ -87,6 +87,18 @@ describe('setnik-web static site SEO & compliance', () => {
       assert.ok(fs.existsSync(path.join(tmpDir, 'venues/empty-bottle/index.html')));
       assert.ok(fs.existsSync(path.join(tmpDir, 'genres/punk/index.html')));
 
+      // Verify full per-metro JSON indices contain 100% of shows (zero homepage truncation)
+      let totalInMetroJson = 0;
+      for (const mId of ['nyc', 'la', 'chi', 'tor']) {
+        const jsonPath = path.join(tmpDir, 'data', `${mId}.json`);
+        assert.ok(fs.existsSync(jsonPath), `Missing data/${mId}.json`);
+        const payload = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+        assert.equal(payload.metro, mId);
+        assert.ok(Array.isArray(payload.shows) && payload.shows.length > 0);
+        totalInMetroJson += payload.shows.length;
+      }
+      assert.equal(totalInMetroJson, summary.totalShows);
+
       // Validate robots.txt & sitemaps
       const robots = fs.readFileSync(path.join(tmpDir, 'robots.txt'), 'utf8');
       assert.ok(robots.includes(`Sitemap: ${siteUrl}/sitemap.xml`));

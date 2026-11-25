@@ -447,6 +447,19 @@ h3 {
   outline-offset: 1px;
 }
 
+.load-more-wrap {
+  margin-top: 16px;
+  text-align: center;
+}
+
+.load-more-wrap[hidden] {
+  display: none;
+}
+
+.filter-pill.is-empty {
+  opacity: 0.48;
+}
+
 /* Compact directory links below listings */
 .directory-chips {
   display: flex;
@@ -1295,17 +1308,21 @@ export function buildPlayerJs() {
     });
   }
 
-  // Homepage City + Date (Tonight / Tomorrow Night / This Weekend / This Week / Next Week / Custom Dates / All) + Genre instant filter controller.
+  // Homepage City + Date + Genre explorer backed by full per-metro JSON indices (/data/{metro}.json)
+  // so 100% of upcoming shows (never truncated) are searchable across Tonight, Tomorrow, Weekend, This/Next Week, Custom Dates, and every Genre.
   var explorer = document.querySelector('[data-home-explorer]');
   if (explorer) {
+    var basePath = explorer.getAttribute('data-base-path') || '';
+    var allMetroIds = (explorer.getAttribute('data-metros') || '').split(',').filter(Boolean);
     var cityBtns = Array.prototype.slice.call(explorer.querySelectorAll('[data-city-btn]'));
     var whenBtns = Array.prototype.slice.call(explorer.querySelectorAll('[data-when-btn]'));
     var genreBtns = Array.prototype.slice.call(explorer.querySelectorAll('[data-genre-btn]'));
     var customBar = explorer.querySelector('[data-custom-dates]');
     var dateFromInput = explorer.querySelector('[data-date-from]');
     var dateToInput = explorer.querySelector('[data-date-to]');
-    var expCards = Array.prototype.slice.call(explorer.querySelectorAll('[data-show-card]'));
-    var expGroups = Array.prototype.slice.call(explorer.querySelectorAll('[data-day-group]'));
+    var listEl = explorer.querySelector('[data-explorer-list]');
+    var loadMoreWrap = explorer.querySelector('[data-explorer-load-more]');
+    var loadMoreBtn = explorer.querySelector('[data-load-more-btn]');
     var expStatus = explorer.querySelector('[data-explorer-status]');
     var expMore = explorer.querySelector('[data-explorer-more]');
     var expEmpty = explorer.querySelector('[data-explorer-empty]');
@@ -1314,8 +1331,11 @@ export function buildPlayerJs() {
     var activeCity = explorer.getAttribute('data-default-metro') || 'all';
     var activeWhen = explorer.getAttribute('data-default-when') || 'this-week';
     var activeGenre = 'all';
+    var PAGE_SIZE = 40;
+    var renderLimit = PAGE_SIZE;
+    var metroCache = {};
+    var requestSeq = 0;
 
-    // Default custom "To" date to +7 days from "From"
     if (dateFromInput && dateToInput && dateFromInput.value) {
       var d0 = new Date(dateFromInput.value + 'T12:00:00Z');
       if (!Number.isNaN(d0.getTime())) {
@@ -1324,69 +1344,228 @@ export function buildPlayerJs() {
       }
     }
 
-    function syncExplorer() {
+    function loadMetro(id) {
+      if (metroCache[id]) return Promise.resolve(metroCache[id]);
+      return fetch(basePath + '/data/' + encodeURIComponent(id) + '.json')
+        .then(function (res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })
+        .then(function (data) {
+          var shows = (data && Array.isArray(data.shows)) ? data.shows : [];
+          metroCache[id] = shows;
+          return shows;
+        })
+        .catch(function () { return []; });
+    }
+
+    function loadShowsForCity(city) {
+      if (city === 'all') {
+        return Promise.all(allMetroIds.map(loadMetro)).then(function (lists) {
+          var merged = [];
+          lists.forEach(function (arr) { Array.prototype.push.apply(merged, arr); });
+          merged.sort(function (a, b) { return (a.ts || 0) - (b.ts || 0); });
+          return merged;
+        });
+      }
+      return loadMetro(city);
+    }
+
+    function matchesWhen(show, when, customFrom, customTo) {
+      if (when === 'tonight') return show.tn === 1;
+      if (when === 'tomorrow') return show.tm === 1;
+      if (when === 'weekend') return show.wk === 1;
+      if (when === 'this-week') return show.tw === 1;
+      if (when === 'next-week') return show.nw === 1;
+      if (when === 'custom') {
+        var cd = show.d || '';
+        return Boolean(cd && (!customFrom || cd >= customFrom) && (!customTo || cd <= customTo));
+      }
+      return true;
+    }
+
+    function el(tag, className, text) {
+      var node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined && text !== null) node.textContent = String(text);
+      return node;
+    }
+
+    function buildShowRow(s) {
+      var li = el('li', 'show-card');
+
+      var stamp = el('div', 'date-stamp');
+      stamp.appendChild(el('span', 'date-stamp-month', s.mo || ''));
+      stamp.appendChild(el('span', 'date-stamp-day', s.dy || '—'));
+      stamp.appendChild(el('span', 'date-stamp-dow', s.dw || ''));
+      li.appendChild(stamp);
+
+      var main = el('div', 'show-card-main');
+      var titleLink = el('a', 'show-card-title');
+      titleLink.href = basePath + s.p;
+      if (s.st === 'cancelled') titleLink.appendChild(el('span', 'badge badge-cancelled', 'Cancelled'));
+      else if (s.st === 'moved') titleLink.appendChild(el('span', 'badge badge-moved', 'Rescheduled'));
+      titleLink.appendChild(document.createTextNode(s.n || ''));
+      main.appendChild(titleLink);
+
+      if (s.sup) main.appendChild(el('p', 'show-card-supports', s.sup));
+
+      var meta = el('div', 'show-card-meta');
+      var vLink = el('a', '', s.v || '');
+      vLink.href = basePath + s.vp;
+      meta.appendChild(vLink);
+      if (s.nb) meta.appendChild(el('span', '', s.nb));
+      if (s.t) meta.appendChild(el('span', '', s.t));
+      main.appendChild(meta);
+
+      if (s.g && s.g.length) {
+        var tagRow = el('div', 'tag-row');
+        s.g.forEach(function (pair) {
+          var a = el('a', 'tag', pair[0]);
+          a.href = basePath + '/genres/' + pair[1] + '/';
+          tagRow.appendChild(a);
+        });
+        main.appendChild(tagRow);
+      }
+      li.appendChild(main);
+
+      var action = el('div', 'show-card-action');
+      if (s.pr) {
+        var priceChip = el('span', 'price-chip');
+        if (s.fr === 1) priceChip.appendChild(el('span', 'badge badge-free', 'Free'));
+        else priceChip.textContent = s.pr;
+        action.appendChild(priceChip);
+      }
+      var det = el('a', 'details-link', 'Lineup & preview →');
+      det.href = basePath + s.p;
+      action.appendChild(det);
+      li.appendChild(action);
+
+      return li;
+    }
+
+    function renderMatched(shows) {
+      if (!listEl) return;
+      var slice = shows.slice(0, renderLimit);
+      var frag = document.createDocumentFragment();
+      var groups = [];
+      var groupMap = {};
+
+      slice.forEach(function (s) {
+        var key = s.d || 'unknown';
+        if (!groupMap[key]) {
+          groupMap[key] = { label: s.dl || 'Upcoming', items: [] };
+          groups.push(groupMap[key]);
+        }
+        groupMap[key].items.push(s);
+      });
+
+      groups.forEach(function (g) {
+        var sec = el('section', 'day-group');
+        var h2 = el('h2', 'day-heading');
+        h2.appendChild(el('span', '', g.label));
+        h2.appendChild(el('span', 'day-count', g.items.length + (g.items.length === 1 ? ' show' : ' shows')));
+        sec.appendChild(h2);
+
+        var ul = el('ul', 'show-list');
+        g.items.forEach(function (s) { ul.appendChild(buildShowRow(s)); });
+        sec.appendChild(ul);
+        frag.appendChild(sec);
+      });
+
+      listEl.textContent = '';
+      listEl.appendChild(frag);
+
+      if (loadMoreWrap && loadMoreBtn) {
+        var remaining = shows.length - slice.length;
+        loadMoreWrap.hidden = remaining <= 0;
+        if (remaining > 0) {
+          loadMoreBtn.textContent = 'Show more (' + remaining + ' remaining)';
+        }
+      }
+    }
+
+    function updateGenreCounts(whenFiltered) {
+      var counts = {};
+      whenFiltered.forEach(function (s) {
+        (s.g || []).forEach(function (pair) {
+          counts[pair[1]] = (counts[pair[1]] || 0) + 1;
+        });
+      });
+
+      genreBtns.forEach(function (btn) {
+        var slug = btn.getAttribute('data-genre-btn') || 'all';
+        var label = btn.getAttribute('data-genre-label') || btn.textContent;
+        if (slug === 'all') {
+          btn.textContent = 'All (' + whenFiltered.length + ')';
+          btn.classList.remove('is-empty');
+        } else {
+          var c = counts[slug] || 0;
+          btn.textContent = c > 0 ? label + ' (' + c + ')' : label;
+          btn.classList.toggle('is-empty', c === 0);
+        }
+      });
+    }
+
+    function updateMoreLink() {
+      var selectedCityBtn = cityBtns.find(function (b) { return b.getAttribute('data-city-btn') === activeCity; });
+      if (!expMore || !selectedCityBtn) return;
+      var name = selectedCityBtn.getAttribute('data-metro-name') || '';
+      var total = selectedCityBtn.getAttribute('data-metro-total') || '';
+      var hubHref = selectedCityBtn.getAttribute('data-hub-href') || '/';
+      var wkHref = selectedCityBtn.getAttribute('data-weekend-href') || hubHref;
+      if (activeCity === 'all') {
+        expMore.href = hubHref;
+        expMore.textContent = 'Browse all venues →';
+      } else if (activeWhen === 'weekend') {
+        expMore.href = wkHref;
+        expMore.textContent = 'All ' + name + ' weekend shows →';
+      } else {
+        expMore.href = hubHref;
+        expMore.textContent = 'Full ' + name + ' calendar (' + total + ') →';
+      }
+    }
+
+    var lastMatched = [];
+
+    function syncExplorer(resetPage) {
+      if (resetPage !== false) renderLimit = PAGE_SIZE;
       if (customBar) customBar.hidden = activeWhen !== 'custom';
+      updateMoreLink();
+
       var customFrom = dateFromInput ? dateFromInput.value : '';
       var customTo = dateToInput ? dateToInput.value : '';
+      var seq = ++requestSeq;
 
-      var visible = 0;
-      expCards.forEach(function (card) {
-        var cityOk = activeCity === 'all' || card.getAttribute('data-metro') === activeCity;
-        var whenOk = true;
-        if (activeWhen === 'tonight') whenOk = card.getAttribute('data-tonight') === '1';
-        else if (activeWhen === 'tomorrow') whenOk = card.getAttribute('data-tomorrow') === '1';
-        else if (activeWhen === 'weekend') whenOk = card.getAttribute('data-weekend') === '1';
-        else if (activeWhen === 'this-week') whenOk = card.getAttribute('data-this-week') === '1';
-        else if (activeWhen === 'next-week') whenOk = card.getAttribute('data-next-week') === '1';
-        else if (activeWhen === 'custom') {
-          var cd = card.getAttribute('data-date') || '';
-          whenOk = Boolean(cd && (!customFrom || cd >= customFrom) && (!customTo || cd <= customTo));
-        }
-        var genreOk = activeGenre === 'all' || (card.getAttribute('data-genres') || '').split('|').indexOf(activeGenre) !== -1;
-        var show = cityOk && whenOk && genreOk;
-        card.hidden = !show;
-        if (show) visible++;
-      });
+      if (expStatus) expStatus.textContent = 'Loading…';
 
-      expGroups.forEach(function (g) {
-        var visInGroup = g.querySelectorAll('[data-show-card]:not([hidden])').length;
-        g.hidden = visInGroup === 0;
-        var countEl = g.querySelector('[data-day-count]');
-        if (countEl && visInGroup > 0) {
-          countEl.textContent = visInGroup + (visInGroup === 1 ? ' show' : ' shows');
+      loadShowsForCity(activeCity).then(function (cityShows) {
+        if (seq !== requestSeq) return;
+        var whenMatched = cityShows.filter(function (s) {
+          return matchesWhen(s, activeWhen, customFrom, customTo);
+        });
+        updateGenreCounts(whenMatched);
+
+        var matched = activeGenre === 'all'
+          ? whenMatched
+          : whenMatched.filter(function (s) {
+              return (s.g || []).some(function (pair) { return pair[1] === activeGenre; });
+            });
+
+        lastMatched = matched;
+        renderMatched(matched);
+        if (expEmpty) expEmpty.hidden = matched.length > 0;
+        if (expStatus) {
+          expStatus.textContent = matched.length + (matched.length === 1 ? ' show' : ' shows');
         }
       });
-
-      if (expEmpty) expEmpty.hidden = visible > 0 || expCards.length === 0;
-
-      if (expStatus) {
-        expStatus.textContent = visible + (visible === 1 ? ' show' : ' shows');
-      }
-
-      var selectedCityBtn = cityBtns.find(function (b) { return b.getAttribute('data-city-btn') === activeCity; });
-      if (expMore && selectedCityBtn) {
-        var name = selectedCityBtn.getAttribute('data-metro-name') || '';
-        var total = selectedCityBtn.getAttribute('data-metro-total') || '';
-        var hubHref = selectedCityBtn.getAttribute('data-hub-href') || '/';
-        var wkHref = selectedCityBtn.getAttribute('data-weekend-href') || hubHref;
-        if (activeCity === 'all') {
-          expMore.href = hubHref;
-          expMore.textContent = 'Browse all venues →';
-        } else if (activeWhen === 'weekend') {
-          expMore.href = wkHref;
-          expMore.textContent = 'All ' + name + ' weekend shows →';
-        } else {
-          expMore.href = hubHref;
-          expMore.textContent = 'Full ' + name + ' calendar (' + total + ') →';
-        }
-      }
     }
 
     cityBtns.forEach(function (btn) {
       btn.addEventListener('click', function () {
         activeCity = btn.getAttribute('data-city-btn') || 'all';
         cityBtns.forEach(function (b) { b.setAttribute('aria-pressed', b === btn ? 'true' : 'false'); });
-        syncExplorer();
+        syncExplorer(true);
       });
     });
 
@@ -1394,7 +1573,7 @@ export function buildPlayerJs() {
       btn.addEventListener('click', function () {
         activeWhen = btn.getAttribute('data-when-btn') || 'all';
         whenBtns.forEach(function (b) { b.setAttribute('aria-pressed', b === btn ? 'true' : 'false'); });
-        syncExplorer();
+        syncExplorer(true);
       });
     });
 
@@ -1403,7 +1582,7 @@ export function buildPlayerJs() {
         if (dateToInput && dateToInput.value && dateFromInput.value && dateToInput.value < dateFromInput.value) {
           dateToInput.value = dateFromInput.value;
         }
-        syncExplorer();
+        syncExplorer(true);
       });
     }
     if (dateToInput) {
@@ -1411,7 +1590,7 @@ export function buildPlayerJs() {
         if (dateFromInput && dateFromInput.value && dateToInput.value && dateToInput.value < dateFromInput.value) {
           dateFromInput.value = dateToInput.value;
         }
-        syncExplorer();
+        syncExplorer(true);
       });
     }
 
@@ -1419,9 +1598,16 @@ export function buildPlayerJs() {
       btn.addEventListener('click', function () {
         activeGenre = btn.getAttribute('data-genre-btn') || 'all';
         genreBtns.forEach(function (b) { b.setAttribute('aria-pressed', b === btn ? 'true' : 'false'); });
-        syncExplorer();
+        syncExplorer(true);
       });
     });
+
+    if (loadMoreBtn) {
+      loadMoreBtn.addEventListener('click', function () {
+        renderLimit += PAGE_SIZE;
+        renderMatched(lastMatched);
+      });
+    }
 
     if (expReset) {
       expReset.addEventListener('click', function () {
@@ -1429,11 +1615,11 @@ export function buildPlayerJs() {
         activeGenre = 'all';
         whenBtns.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-when-btn') === 'all' ? 'true' : 'false'); });
         genreBtns.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-genre-btn') === 'all' ? 'true' : 'false'); });
-        syncExplorer();
+        syncExplorer(true);
       });
     }
 
-    syncExplorer();
+    syncExplorer(true);
   }
 
   // Progressive Deezer 30-second preview lookup via JSONP (mirrors the Setnik app's src/lib/deezer.ts).

@@ -25,11 +25,18 @@ import {
   addDaysYmd,
   canonicalUrl,
   dayOfWeek,
+  formatDayNum,
+  formatLongDate,
+  formatMonthShort,
+  formatPrice,
   formatShortDate,
+  formatShowTime,
+  formatWeekdayShort,
   localYmd,
   parseWallClock,
   slugify,
 } from './html.mjs';
+import { buildEventName } from './schema.mjs';
 import { buildRobotsTxt, buildSitemapTxt, buildSitemapXml } from './sitemaps.mjs';
 import {
   renderAreaHubPage,
@@ -139,11 +146,10 @@ function buildCollections(routedShows, now) {
     showsByMetro.get(mId).push(s);
   }
 
-  // 1. Weekend hubs + date-bucket tags per metro (ordered with NYC, LA, Chicago first, then top 10 order)
+  // 1. Weekend hubs + date-bucket tags + full per-metro JSON payloads (ordered NYC, LA, Chicago first)
   const weekendHubs = [];
   const homeMetros = [];
-  const homeShows = [];
-  const homeSeen = new Set();
+  const metroPayloads = new Map();
 
   for (const [mId, list] of showsByMetro.entries()) {
     const metro = getMetro(mId);
@@ -154,12 +160,8 @@ function buildCollections(routedShows, now) {
     const nextWeekEnd = addDaysYmd(today, 13);
     const range = getWeekendRange(now, metro.tz);
 
-    const tonightBucket = [];
-    const tomorrowBucket = [];
     const wkShows = [];
-    const thisWeekBucket = [];
-    const nextWeekBucket = [];
-    const laterBucket = [];
+    const serializedShows = [];
 
     for (const s of list) {
       const w = parseWallClock(s.startsAt);
@@ -174,34 +176,52 @@ function buildCollections(routedShows, now) {
       s.isWeekend = isWeekend;
       s.isThisWeek = isThisWeek;
       s.isNextWeek = isNextWeek;
-      if (isTonight) tonightBucket.push(s);
-      if (isTomorrow) tomorrowBucket.push(s);
       if (isWeekend) wkShows.push(s);
-      if (isThisWeek) thisWeekBucket.push(s);
-      if (isNextWeek) nextWeekBucket.push(s);
-      if (d && d > nextWeekEnd) laterBucket.push(s);
+
+      const acts = [...(s.acts || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      const supports = s.title ? acts.map((a) => a.name) : acts.slice(1).map((a) => a.name);
+      const supportsLine = supports.length ? `${s.title ? 'Featuring' : 'With'} ${supports.join(', ')}` : '';
+
+      serializedShows.push({
+        p: s.pagePath,
+        n: buildEventName(s),
+        sup: supportsLine,
+        d,
+        dl: d ? formatLongDate(d) : 'Upcoming',
+        mo: d ? formatMonthShort(d) : '',
+        dy: d ? formatDayNum(d) : '—',
+        dw: d ? formatWeekdayShort(d) : '',
+        t: formatShowTime(s),
+        v: s.venue.name,
+        vp: s.venuePath,
+        nb: s.venue.neighborhood || s.venue.area || '',
+        m: metro.id,
+        g: (s.genres || []).map((g) => [g, slugify(g, 40)]),
+        pr: formatPrice(s.price),
+        fr: s.price?.isFree ? 1 : 0,
+        st: s.status === 'cancelled' ? 'cancelled' : (s.status === 'moved' ? 'moved' : ''),
+        ts: new Date(s.startsAt).getTime() || 0,
+        tn: isTonight ? 1 : 0,
+        tm: isTomorrow ? 1 : 0,
+        wk: isWeekend ? 1 : 0,
+        tw: isThisWeek ? 1 : 0,
+        nw: isNextWeek ? 1 : 0,
+      });
     }
 
-    // Balanced homepage slice per metro (fast HTML, guaranteed coverage for Tonight, Tomorrow, Weekend, This/Next Week & Custom Dates)
-    const addHome = (arr, limit) => {
-      let added = 0;
-      for (const s of arr) {
-        if (added >= limit) break;
-        if (homeSeen.has(s.slug)) continue;
-        homeSeen.add(s.slug);
-        homeShows.push(s);
-        added++;
-      }
-    };
-    addHome(tonightBucket, 10);
-    addHome(tomorrowBucket, 10);
-    addHome(wkShows, 12);
-    addHome(thisWeekBucket, 12);
-    addHome(nextWeekBucket, 12);
-    addHome(laterBucket, 10);
-    if (tonightBucket.length + tomorrowBucket.length + wkShows.length + thisWeekBucket.length + nextWeekBucket.length + laterBucket.length === 0) {
-      addHome(list, 12);
-    }
+    metroPayloads.set(metro.id, {
+      metro: metro.id,
+      dates: {
+        today,
+        tomorrow,
+        weekendStart: range.start,
+        weekendEnd: range.end,
+        weekEnd,
+        nextWeekStart,
+        nextWeekEnd,
+      },
+      shows: serializedShows,
+    });
 
     const slug = `${metro.slug}-shows-this-weekend`;
     weekendHubs.push({
@@ -226,7 +246,12 @@ function buildCollections(routedShows, now) {
   }
   weekendHubs.sort((a, b) => metroRank(a.metro.id) - metroRank(b.metro.id) || b.shows.length - a.shows.length);
   homeMetros.sort((a, b) => metroRank(a.id) - metroRank(b.id) || b.totalCount - a.totalCount);
-  homeShows.sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+
+  // Initial SSR shows for homepage first paint & crawlers (default metro's This Week, fallback to upcoming)
+  const defaultMetroId = homeMetros[0]?.id;
+  const defaultList = defaultMetroId ? (showsByMetro.get(defaultMetroId) || []) : routedShows;
+  const defaultThisWeek = defaultList.filter((s) => s.isThisWeek);
+  const homeShows = (defaultThisWeek.length ? defaultThisWeek : defaultList).slice(0, 25);
 
   // 2. City / Borough / Neighborhood hubs (e.g. /nyc-live-music/, /brooklyn-live-music/, /jersey-city-live-music/)
   const areaMap = new Map();
@@ -373,7 +398,7 @@ function buildCollections(routedShows, now) {
     (a, b) => b.shows.length - a.shows.length || a.name.localeCompare(b.name),
   );
 
-  return { weekendHubs, areaHubs, venues, genres, homeMetros, homeShows };
+  return { weekendHubs, areaHubs, venues, genres, homeMetros, homeShows, metroPayloads };
 }
 
 /** Build the complete static site into `outDir`. */
@@ -421,7 +446,7 @@ export async function buildSite({
   }
 
   const routedShows = assignRoutes(dataset.shows);
-  const { weekendHubs, areaHubs, venues, genres, homeMetros, homeShows } = buildCollections(routedShows, now);
+  const { weekendHubs, areaHubs, venues, genres, homeMetros, homeShows, metroPayloads } = buildCollections(routedShows, now);
 
   const ctx = {
     siteUrl,
@@ -433,11 +458,14 @@ export async function buildSite({
     primaryWeekendHub: weekendHubs[0] || null,
   };
 
-  // Write static assets
+  // Write static assets & complete per-metro JSON indices for zero-truncation homepage filtering
   writeOut(outDir, 'assets/styles.css', buildStylesCss());
   writeOut(outDir, 'assets/player.js', buildPlayerJs());
   writeOut(outDir, 'assets/favicon.svg', buildFaviconSvg());
   writeOut(outDir, '.nojekyll', '');
+  for (const [mId, payload] of metroPayloads.entries()) {
+    writeOut(outDir, path.join('data', `${mId}.json`), JSON.stringify(payload));
+  }
 
   const sitemapEntries = [];
   const registerUrl = (relPath, priority, changefreq = 'daily') => {

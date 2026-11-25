@@ -50,12 +50,18 @@ export function dedupeKey(show) {
   return [date, normKeyPart(show.venue?.name), normKeyPart(headlinerName(show))].join('|');
 }
 
+const GENRE_BY_LOWER = new Map([...ALLOWED_GENRES_SET].map((g) => [g.toLowerCase(), g]));
+GENRE_BY_LOWER.set('club & techno', 'Electronic');
+GENRE_BY_LOWER.set('club and techno', 'Electronic');
+GENRE_BY_LOWER.set('edm', 'Electronic');
+
 function cleanGenres(rawGenres) {
   if (!Array.isArray(rawGenres)) return [];
   const out = [];
   for (const g of rawGenres) {
-    const mapped = g === 'Club & Techno' ? 'Electronic' : g;
-    if (typeof mapped === 'string' && ALLOWED_GENRES_SET.has(mapped) && !out.includes(mapped)) {
+    if (typeof g !== 'string') continue;
+    const mapped = GENRE_BY_LOWER.get(g.trim().toLowerCase());
+    if (mapped && !out.includes(mapped)) {
       out.push(mapped);
     }
   }
