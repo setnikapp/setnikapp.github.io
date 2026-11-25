@@ -148,30 +148,41 @@ function buildCollections(routedShows, now) {
   for (const [mId, list] of showsByMetro.entries()) {
     const metro = getMetro(mId);
     const today = localYmd(now, metro.tz);
+    const tomorrow = addDaysYmd(today, 1);
     const weekEnd = addDaysYmd(today, 6);
     const nextWeekStart = addDaysYmd(today, 7);
     const nextWeekEnd = addDaysYmd(today, 13);
     const range = getWeekendRange(now, metro.tz);
 
+    const tonightBucket = [];
+    const tomorrowBucket = [];
     const wkShows = [];
     const thisWeekBucket = [];
     const nextWeekBucket = [];
+    const laterBucket = [];
 
     for (const s of list) {
       const w = parseWallClock(s.startsAt);
       const d = w?.date || '';
+      const isTonight = Boolean(d && d === today);
+      const isTomorrow = Boolean(d && d === tomorrow);
       const isWeekend = Boolean(d && d >= range.start && d <= range.end);
       const isThisWeek = Boolean(d && d >= today && d <= weekEnd);
       const isNextWeek = Boolean(d && d >= nextWeekStart && d <= nextWeekEnd);
+      s.isTonight = isTonight;
+      s.isTomorrow = isTomorrow;
       s.isWeekend = isWeekend;
       s.isThisWeek = isThisWeek;
       s.isNextWeek = isNextWeek;
+      if (isTonight) tonightBucket.push(s);
+      if (isTomorrow) tomorrowBucket.push(s);
       if (isWeekend) wkShows.push(s);
       if (isThisWeek) thisWeekBucket.push(s);
       if (isNextWeek) nextWeekBucket.push(s);
+      if (d && d > nextWeekEnd) laterBucket.push(s);
     }
 
-    // Balanced homepage slice per metro (fast HTML, guaranteed coverage for This Weekend, This Week, and Next Week)
+    // Balanced homepage slice per metro (fast HTML, guaranteed coverage for Tonight, Tomorrow, Weekend, This/Next Week & Custom Dates)
     const addHome = (arr, limit) => {
       let added = 0;
       for (const s of arr) {
@@ -182,10 +193,13 @@ function buildCollections(routedShows, now) {
         added++;
       }
     };
+    addHome(tonightBucket, 10);
+    addHome(tomorrowBucket, 10);
     addHome(wkShows, 12);
-    addHome(thisWeekBucket, 14);
+    addHome(thisWeekBucket, 12);
     addHome(nextWeekBucket, 12);
-    if (wkShows.length + thisWeekBucket.length + nextWeekBucket.length === 0) {
+    addHome(laterBucket, 10);
+    if (tonightBucket.length + tomorrowBucket.length + wkShows.length + thisWeekBucket.length + nextWeekBucket.length + laterBucket.length === 0) {
       addHome(list, 12);
     }
 

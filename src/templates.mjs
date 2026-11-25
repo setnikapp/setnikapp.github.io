@@ -226,6 +226,9 @@ function renderShowCard(show, ctx) {
     class="show-card"
     data-show-card
     data-metro="${show.venue.metro || 'nyc'}"
+    data-date="${ymd}"
+    data-tonight="${show.isTonight ? '1' : '0'}"
+    data-tomorrow="${show.isTomorrow ? '1' : '0'}"
     data-weekend="${show.isWeekend ? '1' : '0'}"
     data-this-week="${show.isThisWeek ? '1' : '0'}"
     data-next-week="${show.isNextWeek ? '1' : '0'}"
@@ -382,15 +385,29 @@ export function renderHomePage({ shows, homeShows = shows, homeMetros = [], week
           <div class="filter-row filter-row-date" role="group" aria-label="Date">
             <span class="filter-label">When</span>
             <div class="filter-pills">
+              <button type="button" class="filter-pill" id="when-btn-tonight" data-when-btn="tonight" aria-pressed="false">Tonight</button>
+              <button type="button" class="filter-pill" id="when-btn-tomorrow" data-when-btn="tomorrow" aria-pressed="false">Tomorrow Night</button>
               <button type="button" class="filter-pill" id="when-btn-weekend" data-when-btn="weekend" aria-pressed="false">This Weekend</button>
               <button type="button" class="filter-pill" id="when-btn-this-week" data-when-btn="this-week" aria-pressed="true">This Week</button>
               <button type="button" class="filter-pill" id="when-btn-next-week" data-when-btn="next-week" aria-pressed="false">Next Week</button>
+              <button type="button" class="filter-pill" id="when-btn-custom" data-when-btn="custom" aria-pressed="false">Custom Dates</button>
               <button type="button" class="filter-pill" id="when-btn-all" data-when-btn="all" aria-pressed="false">All</button>
             </div>
             <div class="explorer-meta">
               <span class="filter-status" data-explorer-status></span>
               ${defaultMetro ? html`<a class="explorer-more-link" data-explorer-more href="${href(basePath, defaultMetro.hubPath)}">Full ${defaultMetro.shortName} calendar (${defaultMetro.totalCount}) →</a>` : ''}
             </div>
+          </div>
+
+          <div class="custom-dates-bar" data-custom-dates hidden role="group" aria-label="Custom date range">
+            <label class="date-field">
+              <span>From</span>
+              <input type="date" class="date-input" id="date-from" data-date-from value="${ctx.generatedDate}" min="${ctx.generatedDate}">
+            </label>
+            <label class="date-field">
+              <span>To</span>
+              <input type="date" class="date-input" id="date-to" data-date-to value="${ctx.generatedDate}" min="${ctx.generatedDate}">
+            </label>
           </div>
 
           ${explorerGenres.length ? html`<div class="filter-row" role="group" aria-label="Genre">
