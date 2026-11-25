@@ -1271,11 +1271,12 @@ export function buildPlayerJs() {
     });
   }
 
-  // Homepage City + Date (This Weekend / This Week / Next Week / All) instant filter controller.
+  // Homepage City + Date (This Weekend / This Week / Next Week / All) + Genre instant filter controller.
   var explorer = document.querySelector('[data-home-explorer]');
   if (explorer) {
     var cityBtns = Array.prototype.slice.call(explorer.querySelectorAll('[data-city-btn]'));
     var whenBtns = Array.prototype.slice.call(explorer.querySelectorAll('[data-when-btn]'));
+    var genreBtns = Array.prototype.slice.call(explorer.querySelectorAll('[data-genre-btn]'));
     var expCards = Array.prototype.slice.call(explorer.querySelectorAll('[data-show-card]'));
     var expGroups = Array.prototype.slice.call(explorer.querySelectorAll('[data-day-group]'));
     var expStatus = explorer.querySelector('[data-explorer-status]');
@@ -1285,6 +1286,7 @@ export function buildPlayerJs() {
 
     var activeCity = explorer.getAttribute('data-default-metro') || 'all';
     var activeWhen = explorer.getAttribute('data-default-when') || 'this-week';
+    var activeGenre = 'all';
 
     function syncExplorer() {
       var visible = 0;
@@ -1294,7 +1296,8 @@ export function buildPlayerJs() {
         if (activeWhen === 'weekend') whenOk = card.getAttribute('data-weekend') === '1';
         else if (activeWhen === 'this-week') whenOk = card.getAttribute('data-this-week') === '1';
         else if (activeWhen === 'next-week') whenOk = card.getAttribute('data-next-week') === '1';
-        var show = cityOk && whenOk;
+        var genreOk = activeGenre === 'all' || (card.getAttribute('data-genres') || '').split('|').indexOf(activeGenre) !== -1;
+        var show = cityOk && whenOk && genreOk;
         card.hidden = !show;
         if (show) visible++;
       });
@@ -1349,10 +1352,20 @@ export function buildPlayerJs() {
       });
     });
 
+    genreBtns.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        activeGenre = btn.getAttribute('data-genre-btn') || 'all';
+        genreBtns.forEach(function (b) { b.setAttribute('aria-pressed', b === btn ? 'true' : 'false'); });
+        syncExplorer();
+      });
+    });
+
     if (expReset) {
       expReset.addEventListener('click', function () {
         activeWhen = 'all';
+        activeGenre = 'all';
         whenBtns.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-when-btn') === 'all' ? 'true' : 'false'); });
+        genreBtns.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-genre-btn') === 'all' ? 'true' : 'false'); });
         syncExplorer();
       });
     }
