@@ -36,25 +36,34 @@ class TestGenresConfigAndWorkflow(unittest.TestCase):
     def test_genres_config_matches_src_config_mjs(self) -> None:
         cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
         genres = cfg["genres"]
-        self.assertEqual(len(genres), 5, "Must define exactly 5 weekly genres")
+        electronic_cities = cfg["electronic_cities"]
+        spotlights = cfg["electronic_spotlights"]
+
+        self.assertEqual(len(genres), 4, "Wednesday NYC non-electronic batch must define 4 genres")
+        self.assertEqual(len(electronic_cities), 5, "Thursday Electronic batch must define 5 cities")
         self.assertEqual(cfg["metro_id"], "nyc")
         self.assertEqual(cfg["cards_per_genre"], 4)
         self.assertEqual(cfg["min_cards_per_genre"], 2)
+        self.assertEqual(cfg["electronic_base_hashtags"], ["#rave", "#edm", "#concerts", "#livemusic"])
+        self.assertEqual(spotlights["metro_id"], "nyc")
+        self.assertEqual(spotlights["count"], 2)
 
-        # Read canonical ALL_GENRES directly from src/config.mjs via node
+        # Read canonical ALL_GENRES and METROS directly from src/config.mjs via node
         proc = subprocess.run(
             [
                 "node",
                 "--input-type=module",
                 "-e",
-                "import { ALL_GENRES } from './src/config.mjs'; console.log(JSON.stringify(ALL_GENRES));",
+                "import { ALL_GENRES, METROS } from './src/config.mjs'; console.log(JSON.stringify({ genres: ALL_GENRES, metros: METROS.map(m => m.id) }));",
             ],
             cwd=str(REPO_ROOT),
             check=True,
             capture_output=True,
             text=True,
         )
-        canonical_genres = set(json.loads(proc.stdout))
+        canonical = json.loads(proc.stdout)
+        canonical_genres = set(canonical["genres"])
+        canonical_metros = set(canonical["metros"])
 
         seen_slugs: set[str] = set()
         for g in genres:
@@ -71,6 +80,14 @@ class TestGenresConfigAndWorkflow(unittest.TestCase):
                 f"Unexpected hashtags for {g['slug']}: {g['hashtags']}",
             )
 
+        expected_city_metros = ["nyc", "la", "chi", "aus", "mtl"]
+        self.assertEqual([c["metro_id"] for c in electronic_cities], expected_city_metros)
+        for c in electronic_cities:
+            self.assertNotIn(c["slug"], seen_slugs)
+            seen_slugs.add(c["slug"])
+            self.assertIn(c["metro_id"], canonical_metros)
+            self.assertIn(c["filter_label"], canonical_genres)
+
     def test_workflow_yaml_valid_zero_artifacts_and_sha_pinned(self) -> None:
         raw = WORKFLOW_PATH.read_text(encoding="utf-8")
         self.assertNotIn(
@@ -84,9 +101,15 @@ class TestGenresConfigAndWorkflow(unittest.TestCase):
         # YAML 1.1 parses bare `on` as boolean True
         triggers = parsed.get("on", parsed.get(True))
         self.assertIsInstance(triggers, dict)
-        self.assertEqual(triggers["schedule"][0]["cron"], "0 19 * * 4")
-        self.assertIn("dry_run", triggers["workflow_dispatch"]["inputs"])
-        self.assertIn("use_mock", triggers["workflow_dispatch"]["inputs"])
+        crons = [entry["cron"] for entry in triggers["schedule"]]
+        self.assertEqual(crons, ["0 19 * * 3", "0 19 * * 4", "0 19 * * 5"])
+        dispatch_inputs = triggers["workflow_dispatch"]["inputs"]
+        self.assertEqual(
+            dispatch_inputs["batch"]["options"],
+            ["electronic_cities", "electronic_spotlights", "nyc_genres"],
+        )
+        self.assertIn("dry_run", dispatch_inputs)
+        self.assertIn("use_mock", dispatch_inputs)
 
         steps = parsed["jobs"]["carousels"]["steps"]
         sha_rx = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$")
@@ -259,6 +282,21 @@ class TestPagesSyncAndPruning(unittest.TestCase):
             self.assertTrue((carousels_root / "2026-11-10").is_dir())
             self.assertTrue((carousels_root / "tiktok_verify.txt").is_file())
 
+            # Syncing a second batch on the same date preserves sibling slug folders
+            ready_spot = tmp_path / "ready_spot"
+            (ready_spot / "nyc-electronic-spotlight-1").mkdir(parents=True)
+            (ready_spot / "nyc-electronic-spotlight-1" / "01_spotlight.jpg").write_bytes(b"fake-spot")
+            sync_pages_repo.sync_carousels(
+                ready_dir=ready_spot,
+                carousels_root=carousels_root,
+                pages_folder="2026-11-26",
+                reference_date=date(2026, 11, 26),
+            )
+            self.assertTrue((carousels_root / "2026-11-26" / "punk" / "01_cover.jpg").is_file())
+            self.assertTrue(
+                (carousels_root / "2026-11-26" / "nyc-electronic-spotlight-1" / "01_spotlight.jpg").is_file()
+            )
+
 
 class TestEndToEndMockRenderAndPublish(unittest.TestCase):
     def test_e2e_mock_selection_playwright_render_dry_run_and_live_rotation(self) -> None:
@@ -267,13 +305,15 @@ class TestEndToEndMockRenderAndPublish(unittest.TestCase):
             selected_path = tmp_path / "selected.json"
             ready_dir = tmp_path / "ready"
 
-            # 1. Run select_shows.mjs --mock
+            # 1. Run select_shows.mjs --batch nyc_genres --mock
             subprocess.run(
                 [
                     "node",
                     str(TOOLS_DIR / "select_shows.mjs"),
+                    "--batch",
+                    "nyc_genres",
                     "--date",
-                    "2026-11-26",
+                    "2026-11-25",
                     "--mock",
                     "--out",
                     str(selected_path),
@@ -284,6 +324,7 @@ class TestEndToEndMockRenderAndPublish(unittest.TestCase):
                 text=True,
             )
             selected = json.loads(selected_path.read_text(encoding="utf-8"))
+            self.assertEqual(selected["batch"], "nyc_genres")
             self.assertGreaterEqual(len(selected["genres"]), 2)
 
             # 2. Render live JPEGs via Playwright Chromium
@@ -306,14 +347,14 @@ class TestEndToEndMockRenderAndPublish(unittest.TestCase):
             # 3. Dry-run publish (no TikTok calls, emits job_summary.md with inline previews)
             summary_dry = publish_tiktok_drafts.publish_pipeline(
                 ready_dir=ready_dir,
-                pages_folder="dry-run-2026-11-26",
+                pages_folder="dry-run-2026-11-25",
                 dry_run=True,
                 skip_url_poll=True,
             )
             dry_md = summary_dry.read_text(encoding="utf-8")
             self.assertIn("DRY RUN", dry_md)
             self.assertIn("Headliner Song to Pick in TikTok", dry_md)
-            self.assertIn("https://setnikapp.github.io/carousels/dry-run-2026-11-26/", dry_md)
+            self.assertIn("https://setnikapp.github.io/carousels/dry-run-2026-11-25/", dry_md)
 
             # 4. Live publish with mocked TikTok HTTP transport + token rotation (0600)
             captured_payloads: list[dict[str, Any]] = []
@@ -353,7 +394,7 @@ class TestEndToEndMockRenderAndPublish(unittest.TestCase):
                 with httpx.Client(transport=httpx.MockTransport(mock_tiktok_handler)) as client:
                     summary_live = publish_tiktok_drafts.publish_pipeline(
                         ready_dir=ready_dir,
-                        pages_folder="2026-11-26",
+                        pages_folder="2026-11-25",
                         dry_run=False,
                         token_out=token_out,
                         http_client=client,
@@ -369,6 +410,106 @@ class TestEndToEndMockRenderAndPublish(unittest.TestCase):
             self.assertIn("LIVE DRAFT UPLOAD", live_md)
             self.assertIn("p_pub_1", live_md)
             self.assertIn("Refresh token rotated:** Yes", live_md)
+
+    def test_e2e_electronic_cities_and_spotlights_batches(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+
+            # A. Thursday electronic_cities batch (NYC, LA, Chicago, Austin, Montreal)
+            elec_selected = tmp_path / "elec_selected.json"
+            elec_ready = tmp_path / "elec_ready"
+            subprocess.run(
+                [
+                    "node",
+                    str(TOOLS_DIR / "select_shows.mjs"),
+                    "--batch",
+                    "electronic_cities",
+                    "--date",
+                    "2026-11-26",
+                    "--mock",
+                    "--out",
+                    str(elec_selected),
+                ],
+                cwd=str(REPO_ROOT),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            elec_manifest_path = render_carousels.render_carousels(elec_selected, out_dir=elec_ready)
+            elec_manifest = json.loads(elec_manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(elec_manifest["batch"], "electronic_cities")
+            self.assertEqual(
+                [c["slug"] for c in elec_manifest["carousels"]],
+                [
+                    "nyc-electronic",
+                    "la-electronic",
+                    "chi-electronic",
+                    "aus-electronic",
+                    "mtl-electronic",
+                ],
+            )
+            expected_tags = {
+                "nyc-electronic": ["#brooklyn", "#rave", "#edm", "#concerts", "#livemusic"],
+                "la-electronic": ["#losangeles", "#rave", "#edm", "#concerts", "#livemusic"],
+                "chi-electronic": ["#chicago", "#rave", "#edm", "#concerts", "#livemusic"],
+                "aus-electronic": ["#austin", "#rave", "#edm", "#concerts", "#livemusic"],
+                "mtl-electronic": ["#montreal", "#rave", "#edm", "#concerts", "#livemusic"],
+            }
+            for c in elec_manifest["carousels"]:
+                self.assertEqual(c["hashtags"], expected_tags[c["slug"]])
+                self.assertFalse(c["title"].startswith("LA LA"), f"Duplicated city in title: {c['title']}")
+                self.assertGreaterEqual(len(c["slides"]), 3)
+                for slide_name in c["slides"]:
+                    with Image.open(elec_ready / c["slug"] / slide_name) as img:
+                        self.assertEqual(img.format, "JPEG")
+                        self.assertEqual(img.size, (1080, 1920))
+
+            # B. Friday electronic_spotlights batch (top 2 NYC electronic artists by Deezer fans, 2 slides each)
+            spot_selected = tmp_path / "spot_selected.json"
+            spot_ready = tmp_path / "spot_ready"
+            subprocess.run(
+                [
+                    "node",
+                    str(TOOLS_DIR / "select_shows.mjs"),
+                    "--batch",
+                    "electronic_spotlights",
+                    "--date",
+                    "2026-11-27",
+                    "--mock",
+                    "--out",
+                    str(spot_selected),
+                ],
+                cwd=str(REPO_ROOT),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            spot_manifest_path = render_carousels.render_carousels(spot_selected, out_dir=spot_ready)
+            spot_manifest = json.loads(spot_manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(spot_manifest["batch"], "electronic_spotlights")
+            self.assertEqual(len(spot_manifest["carousels"]), 2)
+            # Ranked by Deezer fan count: Four Tet (520k) > Floating Points (310k)
+            self.assertEqual(spot_manifest["carousels"][0]["headliner_sound_query"], "Four Tet")
+            self.assertEqual(spot_manifest["carousels"][1]["headliner_sound_query"], "Floating Points")
+            for c in spot_manifest["carousels"]:
+                self.assertEqual(c["kind"], "spotlight")
+                self.assertEqual(c["slides"], ["01_spotlight.jpg", "02_show.jpg"])
+                self.assertEqual(c["hashtags"], ["#brooklyn", "#rave", "#edm", "#concerts", "#livemusic"])
+                for slide_name in c["slides"]:
+                    with Image.open(spot_ready / c["slug"] / slide_name) as img:
+                        self.assertEqual(img.format, "JPEG")
+                        self.assertEqual(img.size, (1080, 1920))
+
+            spot_summary = publish_tiktok_drafts.publish_pipeline(
+                ready_dir=spot_ready,
+                pages_folder="dry-run-2026-11-27",
+                dry_run=True,
+                skip_url_poll=True,
+            )
+            spot_md = spot_summary.read_text(encoding="utf-8")
+            self.assertIn("electronic_spotlights", spot_md)
+            self.assertIn("520,000", spot_md)
+            self.assertIn("Four Tet", spot_md)
 
 
 if __name__ == "__main__":

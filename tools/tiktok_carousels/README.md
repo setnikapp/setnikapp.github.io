@@ -1,10 +1,18 @@
 # Weekly TikTok Genre Carousels Pipeline
 
-Zero-cost, headless weekly GitHub Actions pipeline inside `setnikapp/setnikapp.github.io`. Every Thursday afternoon (`0 19 * * 4` UTC — 2:00 PM EST / 3:00 PM EDT), it:
+Zero-cost, headless weekly GitHub Actions pipeline inside `setnikapp/setnikapp.github.io`. Runs on a staggered **Wed / Thu / Fri** schedule (each run ≤ 5 drafts to stay within TikTok's 5-pending-drafts-per-24-hour API limit):
 
-1. Selects 2–4 upcoming NYC/NJ Fri–Sun weekend shows per configured genre (up to 5 genres: `rock`, `punk`, `electronic`, `indie`, `metal`) via Setnik Web's live data pipeline (`src/fetch.mjs`).
+| Day (19:00 UTC / 2 PM EST / 3 PM EDT) | Batch | Posts (Max Drafts) | Hashtags |
+| --- | --- | --- | --- |
+| **Wednesday** (`0 19 * * 3`) | `nyc_genres` | NYC Rock, Punk, Indie, Metal roundups (**4**) | `#nyc #brooklyn #concerts #livemusic #<genre>` |
+| **Thursday** (`0 19 * * 4`) | `electronic_cities` | Electronic roundups for **NYC, LA, Chicago, Austin, Montréal** (**5**) | `#<city\|neighborhood> #rave #edm #concerts #livemusic` |
+| **Friday** (`0 19 * * 5`) | `electronic_spotlights` | Top **2** NYC Electronic artist spotlights ranked by **Deezer fan count** (2-slide hook + Setnik Deck card) (**2**) | `#<city\|neighborhood> #rave #edm #concerts #livemusic` |
+
+On every run, the pipeline:
+
+1. Selects upcoming Fri–Sun weekend shows via Setnik Web's live data pipeline (`src/fetch.mjs`) and ranks NYC Electronic spotlights via Deezer's public artist fan count (`nb_fan`).
 2. Renders 1080×1920 Setnik app card JPEGs via Playwright Chromium (`render_carousels.py`).
-3. Syncs JPEGs into `static/carousels/<pages_folder>/<genre>/`, prunes folders older than 30 days, and pushes to `main` (triggering `.github/workflows/deploy.yml` so slides serve live at `https://setnikapp.github.io/carousels/...`).
+3. Syncs JPEGs into `static/carousels/<pages_folder>/<slug>/`, prunes folders older than 30 days, and pushes to `main` (triggering `.github/workflows/deploy.yml` so slides serve live at `https://setnikapp.github.io/carousels/...`).
 4. Polls every live slide URL until HTTP 200 (rejecting 301/302 redirects), uploads up to 5 photo carousel drafts to TikTok Creator Inbox (`MEDIA_UPLOAD` + `PULL_FROM_URL`), rotates `TIKTOK_REFRESH_TOKEN`, and writes inline previews + exact headliner artist names to search in TikTok's native sound library into `$GITHUB_STEP_SUMMARY`.
 
 ---
@@ -49,22 +57,19 @@ TIKTOK_CLIENT_SECRET="<your-client-secret>" \
   --redirect-uri "https://setnikapp.github.io/"
 ```
 
-1. Open the printed TikTok authorization URL and approve `video.upload`.
-2. Paste the full redirected callback URL back into the terminal.
-3. Copy the printed `TIKTOK_REFRESH_TOKEN` into your GitHub Repository Secrets.
-
 ---
 
-## Dry-Run Instructions
+## Dry-Run & Manual Batch Instructions
 
 ### In GitHub Actions
 1. Go to **Actions → Weekly TikTok Genre Carousels → Run workflow**.
-2. Check **`dry_run: true`** (and optionally **`use_mock: true`** to test without Supabase).
-3. Slides are published under `static/carousels/dry-run-<YYYY-MM-DD>/`, verified via HTTP 200 polling, and previewed inline in the workflow's **Summary** tab without touching the TikTok API.
+2. Pick **`batch`** (`electronic_cities`, `electronic_spotlights`, or `nyc_genres`).
+3. Check **`dry_run: true`** (and optionally **`use_mock: true`** to test without Supabase).
+4. Slides publish under `static/carousels/dry-run-<YYYY-MM-DD>/` and preview inline in the workflow's **Summary** tab without touching the TikTok API.
 
 ### Locally (Offline)
 ```bash
-node tools/tiktok_carousels/select_shows.mjs --date 2026-11-26 --mock
+node tools/tiktok_carousels/select_shows.mjs --batch electronic_cities --date 2026-11-26 --mock
 python3 tools/tiktok_carousels/render_carousels.py --input build/carousel_selected/2026-11-26/selected.json
 python3 tools/tiktok_carousels/publish_tiktok_drafts.py \
   --date 2026-11-26 \

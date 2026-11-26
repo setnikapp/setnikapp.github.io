@@ -3,6 +3,8 @@
   "min_cards_per_genre": 2,
   "city_label": "NYC / NJ",
   "metro_id": "nyc",
+  "deck_city_label": "New York · 25 mi",
+  "electronic_base_hashtags": ["#rave", "#edm", "#concerts", "#livemusic"],
   "genres": [
     {
       "slug": "rock",
@@ -21,14 +23,6 @@
       "hashtags": ["#nyc", "#brooklyn", "#concerts", "#livemusic", "#punk"]
     },
     {
-      "slug": "electronic",
-      "display_name": "Electronic",
-      "filter_label": "Electronic",
-      "cover_title": "NYC ELECTRONIC SHOWS · THIS WEEKEND",
-      "accent_color": "#E4574E",
-      "hashtags": ["#nyc", "#brooklyn", "#concerts", "#livemusic", "#electronic"]
-    },
-    {
       "slug": "indie",
       "display_name": "Indie",
       "filter_label": "Indie Rock",
@@ -44,5 +38,77 @@
       "accent_color": "#D7263D",
       "hashtags": ["#nyc", "#brooklyn", "#concerts", "#livemusic", "#metal"]
     }
-  ]
+  ],
+  "electronic_cities": [
+    {
+      "slug": "nyc-electronic",
+      "metro_id": "nyc",
+      "city_label": "NYC / NJ",
+      "city_short": "NYC",
+      "deck_city_label": "New York · 25 mi",
+      "city_hashtag": "#nyc",
+      "display_name": "NYC Electronic",
+      "filter_label": "Electronic",
+      "cover_title": "NYC ELECTRONIC SHOWS · THIS WEEKEND",
+      "accent_color": "#E4574E"
+    },
+    {
+      "slug": "la-electronic",
+      "metro_id": "la",
+      "city_label": "Los Angeles",
+      "city_short": "LA",
+      "deck_city_label": "Los Angeles · 25 mi",
+      "city_hashtag": "#losangeles",
+      "display_name": "LA Electronic",
+      "filter_label": "Electronic",
+      "cover_title": "LA ELECTRONIC SHOWS · THIS WEEKEND",
+      "accent_color": "#E4574E"
+    },
+    {
+      "slug": "chi-electronic",
+      "metro_id": "chi",
+      "city_label": "Chicago",
+      "city_short": "Chicago",
+      "deck_city_label": "Chicago · 25 mi",
+      "city_hashtag": "#chicago",
+      "display_name": "Chicago Electronic",
+      "filter_label": "Electronic",
+      "cover_title": "CHICAGO ELECTRONIC SHOWS · THIS WEEKEND",
+      "accent_color": "#E4574E"
+    },
+    {
+      "slug": "aus-electronic",
+      "metro_id": "aus",
+      "city_label": "Austin",
+      "city_short": "Austin",
+      "deck_city_label": "Austin · 25 mi",
+      "city_hashtag": "#austin",
+      "display_name": "Austin Electronic",
+      "filter_label": "Electronic",
+      "cover_title": "AUSTIN ELECTRONIC SHOWS · THIS WEEKEND",
+      "accent_color": "#E4574E"
+    },
+    {
+      "slug": "mtl-electronic",
+      "metro_id": "mtl",
+      "city_label": "Montréal",
+      "city_short": "Montréal",
+      "deck_city_label": "Montréal · 25 mi",
+      "city_hashtag": "#montreal",
+      "display_name": "Montréal Electronic",
+      "filter_label": "Electronic",
+      "cover_title": "MONTREAL ELECTRONIC SHOWS · THIS WEEKEND",
+      "accent_color": "#E4574E"
+    }
+  ],
+  "electronic_spotlights": {
+    "metro_id": "nyc",
+    "city_label": "NYC / NJ",
+    "city_short": "NYC",
+    "deck_city_label": "New York · 25 mi",
+    "city_hashtag": "#nyc",
+    "filter_label": "Electronic",
+    "accent_color": "#E4574E",
+    "count": 2
+  }
 }

@@ -2,10 +2,23 @@ name: Weekly TikTok Genre Carousels
 
 on:
   schedule:
-    # Thursdays at 19:00 UTC (2:00 PM EST / 3:00 PM EDT)
+    # Wednesdays 19:00 UTC (2:00 PM EST / 3:00 PM EDT): NYC non-electronic genres (4 drafts)
+    - cron: '0 19 * * 3'
+    # Thursdays 19:00 UTC (2:00 PM EST / 3:00 PM EDT): Electronic multi-city roundups (NYC, LA, Chicago, Austin, Montreal — 5 drafts)
     - cron: '0 19 * * 4'
+    # Fridays 19:00 UTC (2:00 PM EST / 3:00 PM EDT): Top 2 NYC Electronic artist spotlights by Deezer fans (2 drafts)
+    - cron: '0 19 * * 5'
   workflow_dispatch:
     inputs:
+      batch:
+        description: 'Weekly batch to run (electronic_cities, electronic_spotlights, or nyc_genres)'
+        type: choice
+        required: true
+        default: 'electronic_cities'
+        options:
+          - electronic_cities
+          - electronic_spotlights
+          - nyc_genres
       dry_run:
         description: 'Validate, render, sync to dry-run-<date>, and preview without uploading to TikTok'
         type: boolean
@@ -33,18 +46,33 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Compute run date and Pages folder
+      - name: Compute run date, batch, and Pages folder
         id: meta
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+          INPUT_BATCH: ${{ inputs.batch }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           RUN_DATE="$(TZ=America/New_York date +%Y-%m-%d)"
+          if [ "${EVENT_NAME}" = "schedule" ]; then
+            case "${EVENT_SCHEDULE}" in
+              "0 19 * * 3") BATCH="nyc_genres" ;;
+              "0 19 * * 5") BATCH="electronic_spotlights" ;;
+              *) BATCH="electronic_cities" ;;
+            esac
+          else
+            BATCH="${INPUT_BATCH:-electronic_cities}"
+          fi
+
           if [ "${INPUT_DRY_RUN}" = "true" ]; then
             PAGES_FOLDER="dry-run-${RUN_DATE}"
           else
             PAGES_FOLDER="${RUN_DATE}"
           fi
+
           echo "run_date=${RUN_DATE}" >> "$GITHUB_OUTPUT"
+          echo "batch=${BATCH}" >> "$GITHUB_OUTPUT"
           echo "pages_folder=${PAGES_FOLDER}" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js
@@ -65,9 +93,10 @@ jobs:
             python3 -m playwright install chromium
           fi
 
-      - name: Select upcoming NYC/NJ weekend shows
+      - name: Select upcoming weekend shows for batch
         env:
           RUN_DATE: ${{ steps.meta.outputs.run_date }}
+          BATCH: ${{ steps.meta.outputs.batch }}
           USE_MOCK: ${{ inputs.use_mock }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -75,9 +104,9 @@ jobs:
           LISTINGS_FEED_URL_TEMPLATE: ${{ secrets.LISTINGS_FEED_URL_TEMPLATE || vars.LISTINGS_FEED_URL_TEMPLATE }}
         run: |
           if [ "${USE_MOCK}" = "true" ]; then
-            node tools/tiktok_carousels/select_shows.mjs --date "${RUN_DATE}" --mock
+            node tools/tiktok_carousels/select_shows.mjs --batch "${BATCH}" --date "${RUN_DATE}" --mock
           else
-            node tools/tiktok_carousels/select_shows.mjs --date "${RUN_DATE}"
+            node tools/tiktok_carousels/select_shows.mjs --batch "${BATCH}" --date "${RUN_DATE}"
           fi
 
       - name: Render 1080x1920 Setnik carousel JPEGs
@@ -90,6 +119,7 @@ jobs:
       - name: Sync carousels into static/carousels and push to main
         env:
           RUN_DATE: ${{ steps.meta.outputs.run_date }}
+          BATCH: ${{ steps.meta.outputs.batch }}
           PAGES_FOLDER: ${{ steps.meta.outputs.pages_folder }}
           PUSH_TOKEN: ${{ secrets.PAGES_REPO_PAT || secrets.GH_SECRETS_PAT }}
         run: |
@@ -111,7 +141,7 @@ jobs:
             exit 1
           fi
 
-          git commit -m "chore(carousels): publish ${PAGES_FOLDER} slides"
+          git commit -m "chore(carousels): publish ${PAGES_FOLDER} (${BATCH}) slides"
           AUTH_HEADER="$(printf 'x-access-token:%s' "${PUSH_TOKEN}" | base64 -w0)"
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${AUTH_HEADER}" \
             push origin HEAD:main

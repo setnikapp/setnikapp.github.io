@@ -339,34 +339,45 @@ def build_job_summary_markdown(
 ) -> str:
     """Generate rich Markdown for $GITHUB_STEP_SUMMARY with inline preview images & sound queries."""
     run_date = manifest.get("run_date", "")
+    batch = manifest.get("batch", "nyc_genres")
     weekend_range = manifest.get("weekend_range", "")
     mode_badge = "DRY RUN" if dry_run else "LIVE DRAFT UPLOAD"
 
     lines: list[str] = [
-        f"## Setnik Weekly TikTok Carousels — {run_date} ({mode_badge})",
+        f"## Setnik Weekly TikTok Carousels — {run_date} · `{batch}` ({mode_badge})",
         "",
+        f"- **Batch:** `{batch}`",
         f"- **Weekend:** {weekend_range}",
         f"- **Pages folder:** `static/carousels/{pages_folder}/`",
         f"- **Carousels processed:** {len(results)}",
         f"- **Refresh token rotated:** {'Yes' if token_rotated else 'No'}",
         "",
-        "| Genre | Slides | Headliner Song to Pick in TikTok | Status / Publish ID |",
+        "| Post | Slides | Headliner Song to Pick in TikTok | Status / Publish ID |",
         "| --- | ---: | --- | --- |",
     ]
     for item in results:
         sound = item.get("headliner_sound_query") or "—"
         status = item.get("status_label") or "—"
+        fans = item.get("deezer_fans")
+        fan_note = f" ({int(fans):,} Deezer fans)" if isinstance(fans, int) and fans > 0 else ""
         lines.append(
-            f"| **{item['display_name']}** (`{item['slug']}`) | {len(item['slide_urls'])} | `{sound}` | {status} |"
+            f"| **{item['display_name']}** (`{item['slug']}`){fan_note} | {len(item['slide_urls'])} | `{sound}` | {status} |"
         )
 
     lines.append("")
     for item in results:
+        fans = item.get("deezer_fans")
+        fan_line = (
+            [f"- **Deezer Fans:** {int(fans):,}"]
+            if isinstance(fans, int) and fans > 0
+            else []
+        )
         lines.extend(
             [
                 f"### {item['display_name']} — `{item['title']}`",
                 "",
                 f"- **TikTok Sound Search:** `{item.get('headliner_sound_query') or '—'}`",
+                *fan_line,
                 f"- **Status:** {item.get('status_label')}",
                 "",
                 "<details><summary>Caption & Hashtags</summary>",
@@ -429,6 +440,7 @@ def publish_pipeline(
                 "title": payload["post_info"]["title"],
                 "description": payload["post_info"]["description"],
                 "headliner_sound_query": str(carousel.get("headliner_sound_query") or ""),
+                "deezer_fans": carousel.get("deezer_fans"),
                 "slide_urls": slide_urls,
                 "payload": payload,
             }

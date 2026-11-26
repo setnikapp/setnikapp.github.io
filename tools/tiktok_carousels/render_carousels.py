@@ -195,20 +195,50 @@ def build_tiktok_copy(
     city_label: str,
 ) -> tuple[str, str, list[str], str]:
     """Build clean, concise TikTok title (<=90 UTF-16), description (<=4000 UTF-16, <=5 hashtags), and sound query."""
+    kind = str(genre.get("kind") or "roundup").strip().lower()
     display_name = str(genre.get("display_name", "Live")).strip()
     shows: list[dict[str, Any]] = list(genre.get("shows") or [])
     hashtags = [str(h).strip() for h in (genre.get("hashtags") or []) if str(h).strip()][:MAX_HASHTAGS]
+    headliner_sound_query = str(shows[0].get("headliner", "")).strip() if shows else ""
 
-    city_short = city_label.split("/")[0].strip() if "/" in city_label else city_label.strip()
-    raw_title = f"{city_short} {display_name} Shows This Weekend"
-    title = truncate_utf16(raw_title, MAX_TITLE_UTF16)
+    if kind == "spotlight" and shows:
+        show = shows[0]
+        headliner = str(show.get("headliner") or "Live Show").strip()
+        venue = str(show.get("venue_name") or "").strip()
+        neighborhood = str(show.get("neighborhood") or show.get("area") or "").strip()
+        short_date = str(show.get("short_date") or "").strip()
+        time_display = str(show.get("time_display") or "").strip()
 
-    lead = (
-        f"{city_short} {display_name} shows this weekend ({weekend_range})."
-        if weekend_range
-        else f"{city_short} {display_name} shows this weekend."
-    )
-    lines: list[str] = [
+        raw_title = f"{headliner} at {venue}" + (f" · {short_date}" if short_date else "")
+        title = truncate_utf16(raw_title, MAX_TITLE_UTF16)
+
+        place = f"{venue} ({neighborhood})" if neighborhood and neighborhood.lower() not in venue.lower() else venue
+        when = ", ".join(p for p in (short_date, time_display) if p)
+        lead = f"{headliner} at {place}" + (f" — {when}." if when else ".")
+        lines: list[str] = [
+            lead,
+            "Swipe for show details — hear a 30s preview on Setnik.",
+        ]
+        if hashtags:
+            lines.extend(["", " ".join(hashtags)])
+        description = truncate_utf16("\n".join(lines), MAX_DESC_UTF16)
+        return title, description, hashtags, headliner_sound_query
+
+    item_city_short = str(genre.get("city_short") or "").strip()
+    if not item_city_short:
+        effective_city = str(genre.get("city_label") or city_label)
+        item_city_short = effective_city.split("/")[0].strip() if "/" in effective_city else effective_city.strip()
+
+    if display_name.lower().startswith(item_city_short.lower()):
+        heading = f"{display_name} Shows This Weekend"
+        lead_prefix = f"{display_name} shows this weekend"
+    else:
+        heading = f"{item_city_short} {display_name} Shows This Weekend"
+        lead_prefix = f"{item_city_short} {display_name} shows this weekend"
+
+    title = truncate_utf16(heading, MAX_TITLE_UTF16)
+    lead = f"{lead_prefix} ({weekend_range})." if weekend_range else f"{lead_prefix}."
+    lines = [
         lead,
         "Swipe for the lineup — hear 30s previews on Setnik.",
     ]
@@ -216,7 +246,6 @@ def build_tiktok_copy(
         lines.extend(["", " ".join(hashtags)])
 
     description = truncate_utf16("\n".join(lines), MAX_DESC_UTF16)
-    headliner_sound_query = str(shows[0].get("headliner", "")).strip() if shows else ""
     return title, description, hashtags, headliner_sound_query
 
 
@@ -600,6 +629,206 @@ def _render_xerox_poster_inner(show: dict[str, Any], palette: dict[str, str], la
     """
 
 
+def render_spotlight_cover_html(
+    genre: dict[str, Any],
+    show: dict[str, Any],
+    wordmark_uri: str,
+) -> str:
+    """Build Slide 1 (01_spotlight.jpg) for a 2-slide Electronic Artist Spotlight inside TikTok safe zones."""
+    accent = html.escape(str(genre.get("accent_color") or CLIP_RED))
+    headliner = str(show.get("headliner") or "Live Show").strip()
+    venue_name = str(show.get("venue_name") or "").strip()
+    neighborhood = str(show.get("neighborhood") or show.get("area") or "").strip()
+    city_pill = str(genre.get("city_label") or neighborhood or "NYC").strip().upper()
+    weekday = str(show.get("weekday_short") or "").upper()
+    month = str(show.get("month_short") or "").upper()
+    day_num = str(show.get("day_num") or "")
+    time_display = str(show.get("time_display") or "").strip()
+    price_display = str(show.get("price_display") or "").strip()
+    supports = [str(a).strip() for a in (show.get("support_acts") or []) if str(a).strip()]
+    support_line = " · ".join(supports[:3])
+
+    date_badge = " ".join(p for p in (weekday, month, day_num) if p)
+    badge_text = f"WEEKEND SPOTLIGHT · {date_badge}" if date_badge else "WEEKEND SPOTLIGHT"
+    headline_px = fit_font(headliner, max_px=116, min_px=56, max_chars_at_max=9)
+    meta_parts = [p for p in (neighborhood, time_display, price_display) if p]
+    meta_line = " · ".join(meta_parts)
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+{_google_fonts_head()}
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  html, body {{
+    width: {SLIDE_WIDTH}px;
+    height: {SLIDE_HEIGHT}px;
+    overflow: hidden;
+    background: {HOUSE_LIGHTS};
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    color: {STAGE_BLACK};
+  }}
+  .canvas {{
+    width: {SLIDE_WIDTH}px;
+    height: {SLIDE_HEIGHT}px;
+    padding: 188px 132px 350px 72px;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    background-image:
+      radial-gradient({LINE_COLOR} 1.5px, transparent 1.5px);
+    background-size: 26px 26px;
+  }}
+  .zine-card {{
+    flex: 1;
+    background: {ENCORE_WHITE};
+    border: 4px solid {STAGE_BLACK};
+    border-radius: 28px;
+    box-shadow: 14px 14px 0 {STAGE_BLACK};
+    padding: 46px 44px 40px 44px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }}
+  .top-bar {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding-bottom: 24px;
+    border-bottom: 2px solid {LINE_COLOR};
+  }}
+  .wordmark {{
+    height: 44px;
+    width: auto;
+    display: block;
+  }}
+  .city-pill {{
+    background: {STAGE_BLACK};
+    color: {ENCORE_WHITE};
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    padding: 10px 20px;
+    border-radius: 999px;
+    text-transform: uppercase;
+  }}
+  .hero {{
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    margin-top: 8px;
+  }}
+  .date-badge {{
+    align-self: flex-start;
+    background: {accent};
+    color: {ENCORE_WHITE};
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: 0.09em;
+    padding: 12px 24px;
+    border-radius: 12px;
+    border: 3px solid {STAGE_BLACK};
+    box-shadow: 5px 5px 0 {STAGE_BLACK};
+  }}
+  .headline {{
+    font-family: 'Anton', Impact, sans-serif;
+    font-size: {headline_px}px;
+    line-height: 0.94;
+    letter-spacing: 0.01em;
+    color: {STAGE_BLACK};
+    text-transform: uppercase;
+    word-break: break-word;
+  }}
+  .support-strip {{
+    font-size: 26px;
+    font-weight: 700;
+    color: {INK_SOFT};
+    line-height: 1.3;
+  }}
+  .detail-box {{
+    background: {SURFACE_2};
+    border: 3px solid {STAGE_BLACK};
+    border-radius: 20px;
+    padding: 26px 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }}
+  .detail-kicker {{
+    font-size: 19px;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: {accent};
+  }}
+  .detail-venue {{
+    font-size: 36px;
+    font-weight: 800;
+    color: {STAGE_BLACK};
+    line-height: 1.1;
+  }}
+  .detail-meta {{
+    font-size: 24px;
+    font-weight: 700;
+    color: {INK_SOFT};
+  }}
+  .footer {{
+    border-top: 2px solid {LINE_COLOR};
+    padding-top: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 23px;
+    font-weight: 700;
+    color: {INK_SOFT};
+  }}
+  .arrow-chip {{
+    background: {STAGE_BLACK};
+    color: {ENCORE_WHITE};
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 26px;
+    font-weight: 800;
+  }}
+</style>
+</head>
+<body>
+  <div class="canvas">
+    <div class="zine-card">
+      <div class="top-bar">
+        <img class="wordmark" src="{wordmark_uri}" alt="Setnik">
+        <div class="city-pill">{html.escape(city_pill)}</div>
+      </div>
+
+      <div class="hero">
+        <div class="date-badge">{html.escape(badge_text)}</div>
+        <h1 class="headline">{html.escape(headliner)}</h1>
+        {f'<div class="support-strip">with {html.escape(support_line)}</div>' if support_line else ''}
+      </div>
+
+      <div class="detail-box">
+        <div class="detail-kicker">NYC Electronic Pick</div>
+        <div class="detail-venue">{html.escape(venue_name)}</div>
+        <div class="detail-meta">{html.escape(meta_line)}</div>
+      </div>
+
+      <div class="footer">
+        <span>Swipe for full card · Hear 30s preview on Setnik</span>
+        <span class="arrow-chip">→</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+
 def render_show_html(
     show: dict[str, Any],
     genre: dict[str, Any],
@@ -616,7 +845,8 @@ def render_show_html(
     time_display = str(show.get("time_display") or "").strip()
     price_display = str(show.get("price_display") or "").strip()
     genres_list = [str(g).strip() for g in (show.get("genres") or []) if str(g).strip()][:3]
-    filter_genre = str(genre.get("display_name") or genre.get("filter_label") or "All").strip()
+    deck_city_label = str(genre.get("deck_city_label") or "New York · 25 mi").strip()
+    filter_genre = str(genre.get("filter_label") or genre.get("display_name") or "All").strip()
     image_url = show.get("image_url")
     progress_pct = 28 + (prng_val % 45)
 
@@ -1101,7 +1331,7 @@ def render_show_html(
     </div>
 
     <div class="filter-row">
-      <div class="filter-chip">New York · 25 mi</div>
+      <div class="filter-chip">{html.escape(deck_city_label)}</div>
       <div class="filter-chip">This weekend</div>
       <div class="filter-chip active">{html.escape(filter_genre)}</div>
     </div>
@@ -1176,10 +1406,11 @@ def _render_html_to_jpeg(page: Page, html_content: str, out_path: Path) -> None:
 
 
 def render_carousels(selection_path: Path, out_dir: Path | None = None) -> Path:
-    """Render all genre carousels from selected.json into JPEGs + manifest.json."""
+    """Render all selected roundups and spotlights from selected.json into JPEGs + manifest.json."""
     selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    batch = str(selection.get("batch") or "nyc_genres")
     run_date = str(selection.get("run_date") or datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-    city_label = str(selection.get("city_label") or "NYC / NJ")
+    default_city_label = str(selection.get("city_label") or "NYC / NJ")
     weekend_range = str(selection.get("weekend_range") or "")
     weekend_banner = str(selection.get("weekend_banner") or "")
     genres: list[dict[str, Any]] = list(selection.get("genres") or [])
@@ -1208,59 +1439,83 @@ def render_carousels(selection_path: Path, out_dir: Path | None = None) -> Path:
 
             for genre in genres:
                 slug = str(genre["slug"]).strip()
+                kind = str(genre.get("kind") or "roundup").strip().lower()
+                item_city_label = str(genre.get("city_label") or default_city_label)
                 shows: list[dict[str, Any]] = list(genre.get("shows") or [])
                 if not shows:
                     continue
 
                 genre_dir = target_dir / slug
+                if genre_dir.exists():
+                    for stale in genre_dir.glob("*.jpg"):
+                        stale.unlink()
                 genre_dir.mkdir(parents=True, exist_ok=True)
 
                 slide_files: list[str] = []
-                cover_name = "01_cover.jpg"
-                cover_html = render_cover_html(genre, weekend_banner, city_label, wordmark_uri)
-                _render_html_to_jpeg(page, cover_html, genre_dir / cover_name)
-                slide_files.append(cover_name)
+                if kind == "spotlight":
+                    spot_show = shows[0]
+                    spot_cover = "01_spotlight.jpg"
+                    spot_html = render_spotlight_cover_html(genre, spot_show, wordmark_uri)
+                    _render_html_to_jpeg(page, spot_html, genre_dir / spot_cover)
+                    slide_files.append(spot_cover)
 
-                for idx, show in enumerate(shows[:4], start=2):
-                    slide_name = f"{idx:02d}_show.jpg"
-                    show_html = render_show_html(show, genre, wordmark_uri)
-                    _render_html_to_jpeg(page, show_html, genre_dir / slide_name)
-                    slide_files.append(slide_name)
+                    show_slide = "02_show.jpg"
+                    show_html = render_show_html(spot_show, genre, wordmark_uri)
+                    _render_html_to_jpeg(page, show_html, genre_dir / show_slide)
+                    slide_files.append(show_slide)
+                    included_shows = [spot_show]
+                else:
+                    cover_name = "01_cover.jpg"
+                    cover_html = render_cover_html(genre, weekend_banner, item_city_label, wordmark_uri)
+                    _render_html_to_jpeg(page, cover_html, genre_dir / cover_name)
+                    slide_files.append(cover_name)
+
+                    included_shows = shows[:4]
+                    for idx, show in enumerate(included_shows, start=2):
+                        slide_name = f"{idx:02d}_show.jpg"
+                        show_html = render_show_html(show, genre, wordmark_uri)
+                        _render_html_to_jpeg(page, show_html, genre_dir / slide_name)
+                        slide_files.append(slide_name)
 
                 title, description, hashtags, sound_query = build_tiktok_copy(
-                    genre, weekend_range, city_label
+                    genre, weekend_range, item_city_label
                 )
-                manifest_carousels.append(
-                    {
-                        "slug": slug,
-                        "display_name": genre.get("display_name", slug.title()),
-                        "filter_label": genre.get("filter_label", genre.get("display_name", slug.title())),
-                        "cover_title": genre.get("cover_title", ""),
-                        "accent_color": genre.get("accent_color", CLIP_RED),
-                        "slides": slide_files,
-                        "title": title,
-                        "description": description,
-                        "hashtags": hashtags,
-                        "headliner_sound_query": sound_query,
-                        "shows": [
-                            {
-                                "id": s.get("id"),
-                                "headliner": s.get("headliner"),
-                                "venue_name": s.get("venue_name"),
-                                "short_date": s.get("short_date"),
-                                "time_display": s.get("time_display"),
-                            }
-                            for s in shows[:4]
-                        ],
-                    }
-                )
+                entry: dict[str, Any] = {
+                    "kind": kind,
+                    "slug": slug,
+                    "metro_id": genre.get("metro_id", selection.get("metro_id", "nyc")),
+                    "city_label": item_city_label,
+                    "display_name": genre.get("display_name", slug.title()),
+                    "filter_label": genre.get("filter_label", genre.get("display_name", slug.title())),
+                    "cover_title": genre.get("cover_title", ""),
+                    "accent_color": genre.get("accent_color", CLIP_RED),
+                    "slides": slide_files,
+                    "title": title,
+                    "description": description,
+                    "hashtags": hashtags,
+                    "headliner_sound_query": sound_query,
+                    "shows": [
+                        {
+                            "id": s.get("id"),
+                            "headliner": s.get("headliner"),
+                            "venue_name": s.get("venue_name"),
+                            "short_date": s.get("short_date"),
+                            "time_display": s.get("time_display"),
+                        }
+                        for s in included_shows
+                    ],
+                }
+                if genre.get("deezer_fans") is not None:
+                    entry["deezer_fans"] = genre["deezer_fans"]
+                manifest_carousels.append(entry)
         finally:
             browser.close()
 
     manifest = {
+        "batch": batch,
         "run_date": run_date,
         "metro_id": selection.get("metro_id", "nyc"),
-        "city_label": city_label,
+        "city_label": default_city_label,
         "weekend_start": selection.get("weekend_start", ""),
         "weekend_end": selection.get("weekend_end", ""),
         "weekend_range": weekend_range,
@@ -1272,7 +1527,7 @@ def render_carousels(selection_path: Path, out_dir: Path | None = None) -> Path:
     manifest_path = target_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(
-        f"[render_carousels] Rendered {len(manifest_carousels)} genre carousels "
+        f"[render_carousels] Rendered {len(manifest_carousels)} carousel(s) for batch={batch} "
         f"({sum(len(c['slides']) for c in manifest_carousels)} JPEGs) -> {manifest_path}"
     )
     return manifest_path

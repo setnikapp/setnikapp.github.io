@@ -75,8 +75,6 @@ def sync_carousels(
         raise FileNotFoundError(f"Rendered carousel directory not found: {ready_dir}")
 
     dest_folder = carousels_root / pages_folder
-    if dest_folder.exists():
-        shutil.rmtree(dest_folder)
     dest_folder.mkdir(parents=True, exist_ok=True)
 
     copied: list[Path] = []
@@ -89,6 +87,8 @@ def sync_carousels(
         if not jpgs:
             continue
         dest_genre = dest_folder / genre_dir.name
+        if dest_genre.exists():
+            shutil.rmtree(dest_genre)
         dest_genre.mkdir(parents=True, exist_ok=True)
         for src in jpgs:
             dst = dest_genre / src.name
