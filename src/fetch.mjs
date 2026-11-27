@@ -23,10 +23,46 @@ import {
   DEFAULT_WINDOW_DAYS,
   getMetro,
 } from './config.mjs';
-import { addDaysYmd, localYmd, parseWallClock, safeWebUrl, toZonedIso } from './html.mjs';
+import {
+  addDaysYmd,
+  effectiveLocalYmd,
+  effectiveShowDate,
+  parseWallClock,
+  safeWebUrl,
+  toZonedIso,
+} from './html.mjs';
 import { ensureOffsetIso } from './schema.mjs';
 
 const FETCH_TIMEOUT_MS = 15_000;
+const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+const ACT_MATCH_THRESHOLD = 0.82;
+
+const LOCATION_ACRONYM_BLACKLIST = new Set([
+  'nyc', 'ny', 'la', 'ca', 'chi', 'il', 'sf', 'tor', 'on', 'mtl', 'qc',
+  'van', 'bc', 'bos', 'ma', 'dc', 'phl', 'pa', 'nj', 'bk', 'bklyn',
+  'us', 'usa', 'uk', 'can', 'tx', 'fl', 'ga', 'wa', 'or', 'co', 'nv',
+  'az', 'mn', 'mi', 'mo', 'oh', 'in', 'wi', 'nc', 'tn', 'ut', 'ab',
+  'mb', 'ns', 'live', 'bar', 'club', 'hall', 'room', 'stage', 'all',
+]);
+
+const INITIALS_STOPWORDS = new Set([
+  'the', 'of', 'and', 'for', 'at', 'in', 'on', 'to', 'a', 'an',
+  'de', 'des', 'du', 'la', 'le', 'les', 'et', 'au', 'aux', 'd', 'l',
+]);
+
+const GENERIC_VENUE_CORES = new Set([
+  'music', 'club', 'live', 'bar', 'room', 'stage', 'house', 'studio',
+  'space', 'lounge', 'hall', 'park', 'garden', 'city', 'town', 'arts',
+  'new', 'york', 'concert', 'event', 'events', 'venue', 'arena', 'civic',
+]);
+
+const ACT_STOPWORDS = new Set(['the', 'and', 'of', 'a', 'an']);
+
+const SUBTITLE_KEYWORDS_RX =
+  /\b(tour|live|release|album|ep|single|record|anniversary|night\s*\d+|show|presents?|experience|tribute|reunion|farewell|residency|showcase|party|fest|festival|world|north\s+american|us|usa|canada|canadian|uk|european|20\d{2}|18\+|21\+|all\s+ages|early|late|matinee|doors|sold\s+out|cancelled|canceled|postponed|rescheduled|moved|dj\s+set|acoustic|solo|unplugged|intimate|special\s+guests?|with|w\/|feat\.?|ft\.?|featuring)\b/i;
+
+const PAREN_TAG_RX =
+  /\b(tour|live|release|album|ep|single|record|anniversary|night\s*\d+|show|presents?|experience|tribute|reunion|farewell|residency|showcase|party|20\d{2}|18\+|21\+|all\s+ages|early|late|matinee|sold\s+out|cancelled|canceled|postponed|rescheduled|moved|dj\s+set|acoustic|solo|unplugged|full\s+band|us|uk|ca|qc|nyc|la)\b/i;
 
 /** Normalize a string for Setnik deduplication (mirrors the Setnik app/src/lib/listings/merge.ts). */
 export function normKeyPart(s) {
@@ -44,10 +80,368 @@ export function headlinerName(show) {
   return sorted[0]?.name || show.title || '';
 }
 
-/** Deduplication key: local date | normalized venue | normalized headliner. */
+/** Deduplication key: effective night date | normalized venue | normalized headliner. */
 export function dedupeKey(show) {
-  const date = String(show.startsAt || '').slice(0, 10);
+  const date = effectiveShowDate(show.startsAt) || String(show.startsAt || '').slice(0, 10);
   return [date, normKeyPart(show.venue?.name), normKeyPart(headlinerName(show))].join('|');
+}
+
+function stripDiacriticsLower(s) {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/['’‘`´ʼ]/g, "'");
+}
+
+function isSubsequence(needle, haystack) {
+  let i = 0;
+  for (let j = 0; j < haystack.length && i < needle.length; j++) {
+    if (haystack[j] === needle[i]) i++;
+  }
+  return i === needle.length;
+}
+
+/**
+ * Canonical normalized venue key handling accents, apostrophes (Pianos/Piano's),
+ * leading English/French articles (The/Le/Les/L'), Theater/Theatre, and Center/Centre.
+ */
+export function venueKey(name) {
+  let s = stripDiacriticsLower(name).replace(/&/g, ' and ').trim();
+  // Normalize parenthesized leading articles like "(Le) Poisson Rouge"
+  s = s.replace(/^\((the|le|les)\)\s+/, '$1 ');
+  // Strip leading English/French articles: The, Le, Les, L' (with optional space)
+  s = s.replace(/^(?:the\s+|les?\s+|l'\s*)/, '');
+  // Remove remaining apostrophes so Piano's === Pianos, Baby's === Babys
+  s = s.replace(/'/g, '');
+  // Normalize British/French/US spellings
+  s = s.replace(/\btheatre\b/g, 'theater').replace(/\bcentre\b/g, 'center');
+  return s.replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function stripParentheticals(raw) {
+  return String(raw || '').replace(/\s*[\(\[][^\)\]]*[\)\]]\s*/g, ' ').trim();
+}
+
+function venueCoreTokens(key) {
+  return key.split(' ').filter((t) => t && t !== 'theater' && t !== 'center');
+}
+
+function extractVenueAcronymInfo(raw) {
+  const lowered = stripDiacriticsLower(raw);
+  const outer = stripParentheticals(lowered);
+  const outerWords = outer.replace(/'/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean);
+  const allInitials = outerWords.map((w) => w[0]).join('');
+  const contentWords = outerWords.filter((w) => !INITIALS_STOPWORDS.has(w));
+  const contentInitials = contentWords.map((w) => w[0]).join('');
+
+  const explicit = new Set();
+  const rx = /[\(\[]([a-z0-9]{2,6})[\)\]]/g;
+  let m;
+  while ((m = rx.exec(lowered)) !== null) {
+    const code = m[1];
+    if (LOCATION_ACRONYM_BLACKLIST.has(code)) continue;
+    if (!outerWords.length || isSubsequence(code, allInitials) || code === contentInitials) {
+      explicit.add(code);
+    }
+  }
+
+  // Standalone short acronym venue name (e.g. "SAT", "La SAT", "LPR")
+  const standalone = venueKey(outer).replace(/^la\s+/, '');
+  if (/^[a-z]{2,5}$/.test(standalone) && !LOCATION_ACRONYM_BLACKLIST.has(standalone)) {
+    explicit.add(standalone);
+  }
+
+  const implicit = new Set();
+  if (contentWords.length >= 3 && /^[a-z]{3,6}$/.test(contentInitials) && !LOCATION_ACRONYM_BLACKLIST.has(contentInitials)) {
+    implicit.add(contentInitials);
+  }
+
+  return { explicit, implicit };
+}
+
+/**
+ * Determine whether two venue names in the same metro refer to the same physical room.
+ * Handles apostrophes, leading The/Le/Les/L', Theater/Theatre, Center/Centre,
+ * French/English word-order flips (Beanfield Theatre / Théâtre Beanfield),
+ * and bilingual parenthetical acronyms like (SAT).
+ */
+export function sameVenueName(a, b) {
+  const ka = venueKey(a);
+  const kb = venueKey(b);
+  if (!ka || !kb) return false;
+  if (ka === kb) return true;
+  if (ka.replace(/\s+/g, '') === kb.replace(/\s+/g, '')) return true;
+
+  // Compare with parenthetical qualifiers stripped (e.g. "SAT" suffix or "(NYC)" city tag)
+  const sa = venueKey(stripParentheticals(a));
+  const sb = venueKey(stripParentheticals(b));
+  if (sa && sb) {
+    if (sa === sb || sa.replace(/\s+/g, '') === sb.replace(/\s+/g, '')) return true;
+  }
+
+  // Sorted tokens handle French/English flips: "Beanfield Theatre" <-> "Théâtre Beanfield", "Bell Centre" <-> "Centre Bell"
+  const sortedA = ka.split(' ').sort().join(' ');
+  const sortedB = kb.split(' ').sort().join(' ');
+  if (sortedA === sortedB) return true;
+  if (sa && sb && sa.split(' ').sort().join(' ') === sb.split(' ').sort().join(' ')) return true;
+
+  // Optional "theater"/"center" suffix/prefix: "L'Olympia" <-> "L' Olympia Theatre"
+  const coreA = venueCoreTokens(sa || ka);
+  const coreB = venueCoreTokens(sb || kb);
+  if (coreA.length > 0 && coreB.length > 0) {
+    const coreKeyA = coreA.slice().sort().join(' ');
+    const coreKeyB = coreB.slice().sort().join(' ');
+    const isSubstantive = coreA.length >= 2 || (coreA[0].length >= 4 && !GENERIC_VENUE_CORES.has(coreA[0]));
+    if (isSubstantive && coreKeyA === coreKeyB) return true;
+  }
+
+  // Bilingual parenthetical acronyms: e.g. "Société des arts technologiques (SAT)" <-> "Society for Arts and Technology (SAT)" / "SAT"
+  const infoA = extractVenueAcronymInfo(a);
+  const infoB = extractVenueAcronymInfo(b);
+  for (const code of infoA.explicit) {
+    if (infoB.explicit.has(code) || infoB.implicit.has(code)) return true;
+  }
+  for (const code of infoB.explicit) {
+    if (infoA.implicit.has(code)) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Clean an act or event title for fuzzy comparison: strips tour subtitles,
+ * release/age/live tags, promoter "presents:" prefixes, inline support clauses,
+ * diacritics, dotted initials, apostrophes, and leading "The".
+ */
+export function cleanActForMatch(name) {
+  let s = stripDiacriticsLower(name).trim();
+  if (!s) return '';
+
+  // Strip promoter prefixes like "Bowery Presents: Band Name"
+  s = s.replace(/^[^:]{2,40}\bpresents\s*[:\-–—]\s*/, '');
+  // Strip "An Evening With ..."
+  s = s.replace(/^(?:an\s+)?evening\s+with\s+/, '');
+
+  // Strip parenthetical / bracketed qualifier tags (or trailing parens when prefix is non-empty)
+  s = s.replace(/\s*\(([^)]*)\)/g, (full, inner, offset) => {
+    if (offset > 1 && PAREN_TAG_RX.test(inner)) return '';
+    return full;
+  });
+  s = s.replace(/\s*\[([^\]]*)\]/g, (full, inner, offset) => {
+    if (offset > 1 && PAREN_TAG_RX.test(inner)) return '';
+    return full;
+  });
+
+  // Strip trailing tour/event subtitles after delimiter (: , - , – , — , | )
+  const sepMatch = /^(.{1,80}?)\s*(?::\s+|\s+[-–—|]\s+)(.+)$/.exec(s);
+  if (sepMatch && SUBTITLE_KEYWORDS_RX.test(sepMatch[2])) {
+    s = sepMatch[1].trim();
+  }
+
+  // Strip inline support clauses ("Band A w/ Band B", "Band A with Band B", "Band A feat. Band B")
+  s = s.replace(/^(.{2,}?)\s+(?:w\/|with|feat\.?|ft\.?|featuring)\s+.+$/, '$1');
+
+  // Strip unpunctuated trailing tour / album-release suffixes
+  s = s.replace(/^(.{2,}?)\s+(?:album|record|ep|single)\s+release(?:\s+(?:show|party|concert))?$/, '$1');
+  s = s.replace(/^(.{2,}?)\s+(?:(?:north\s+american|world|us|usa|canada|canadian|uk|european|spring|summer|fall|winter|20\d{2})\s+)*tour(?:\s+20\d{2})?$/, '$1');
+  s = s.replace(/^(.{2,}?)\s+live\s+(?:in|at)\s+[a-z0-9\s]+$/, '$1');
+
+  // Collapse dotted initials ("D.C." -> "dc", "R.E.M." -> "rem", "A.G." -> "ag") and title abbreviations
+  s = s.replace(/\b(st|dr|mr|mrs|ms|jr|sr)\./g, '$1');
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(/\b([a-z])\.([a-z])\b/g, '$1$2').replace(/\b([a-z]{2,})\.(?=\s|$)/g, '$1');
+  } while (s !== prev);
+  s = s.replace(/\b([a-z])\.(?=\s|$)/g, '$1');
+
+  s = s
+    .replace(/&/g, ' and ')
+    .replace(/'/g, '')
+    .replace(/^the\s+/, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+  return s;
+}
+
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  if (a.length > b.length) [a, b] = [b, a];
+  let prev = new Array(a.length + 1);
+  let curr = new Array(a.length + 1);
+  for (let i = 0; i <= a.length; i++) prev[i] = i;
+  for (let j = 1; j <= b.length; j++) {
+    curr[0] = j;
+    const bj = b.charCodeAt(j - 1);
+    for (let i = 1; i <= a.length; i++) {
+      const cost = a.charCodeAt(i - 1) === bj ? 0 : 1;
+      curr[i] = Math.min(prev[i] + 1, curr[i - 1] + 1, prev[i - 1] + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[a.length];
+}
+
+function prefixBeforeSubtitle(raw) {
+  const s = stripDiacriticsLower(raw).trim();
+  const m = /^(.{1,80}?)\s*(?::\s+|\s+[-–—|]\s+).+$/.exec(s);
+  return m ? cleanActForMatch(m[1]) : '';
+}
+
+/**
+ * Similarity score in [0, 1] between two act names.
+ * Guards against false positives on short names (<=3 chars require exact match)
+ * and distinct numeric suffixes (e.g. Band 10 vs Band 11).
+ */
+export function actSimilarity(rawA, rawB) {
+  const a = cleanActForMatch(rawA);
+  const b = cleanActForMatch(rawB);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+
+  const ac = a.replace(/\s+/g, '');
+  const bc = b.replace(/\s+/g, '');
+  if (ac === bc) return 0.98;
+
+  // Handle untagged subtitle separators like "METZ: Strange Peace" vs "METZ"
+  const pa = prefixBeforeSubtitle(rawA);
+  const pb = prefixBeforeSubtitle(rawB);
+  if ((pa && pa === b) || (pb && pb === a) || (pa && pb && pa === pb)) {
+    return 0.95;
+  }
+
+  // Short names (<= 3 chars, e.g. "X", "Air", "Low") require exact match after cleaning
+  if (Math.min(ac.length, bc.length) <= 3) return 0;
+
+  // Distinct embedded numbers (e.g. "Band 30" vs "Band 60", "Sum 41" vs "Sum 42") never fuzzy-match
+  const numsA = ac.match(/\d+/g) || [];
+  const numsB = bc.match(/\d+/g) || [];
+  if ((numsA.length > 0 || numsB.length > 0) && numsA.join(',') !== numsB.join(',')) {
+    return 0;
+  }
+
+  // Word-boundary prefix match for untagged subtitles / backing bands ("Rev. Vince Anderson" vs "... & The Love Choir")
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  if ((shorter.length >= 5 || (shorter.includes(' ') && shorter.length >= 4)) && longer.startsWith(`${shorter} `)) {
+    return 0.9;
+  }
+
+  // Token-set overlap (ignoring filler words when substantive tokens exist)
+  const rawTokA = a.split(' ').filter(Boolean);
+  const rawTokB = b.split(' ').filter(Boolean);
+  const tokA = new Set(rawTokA.filter((t) => !ACT_STOPWORDS.has(t)));
+  const tokB = new Set(rawTokB.filter((t) => !ACT_STOPWORDS.has(t)));
+  let tokenDice = 0;
+  if (tokA.size > 0 && tokB.size > 0) {
+    let inter = 0;
+    for (const t of tokA) {
+      if (tokB.has(t)) inter++;
+    }
+    if (inter === tokA.size && inter === tokB.size) return 0.95;
+    tokenDice = (2 * inter) / (tokA.size + tokB.size);
+  }
+
+  const editSim = 1 - levenshtein(ac, bc) / Math.max(ac.length, bc.length);
+  return Math.max(editSim, tokenDice);
+}
+
+function splitCoBillParts(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return [];
+  const out = [s];
+  // Split explicit co-bill delimiters: " / ", " // ", " + " (not "+ the"), " w/ ", " with ", " feat. ", " ft. ", " b2b ", ", "
+  const parts = s.split(/\s*(?:\s\/+\s|\s\+\s(?!the\b)|\s+(?:w\/|with|feat\.?|ft\.?|featuring|b2b)\s+|,\s+(?!the\b))/i);
+  if (parts.length > 1) {
+    for (const p of parts) {
+      const trimmed = p.trim();
+      if (trimmed) out.push(trimmed);
+    }
+  }
+  // Split "Band A & Band B" co-bills (avoiding "Band & The Backing Band")
+  const ampParts = s.split(/\s+&\s+(?!the\b)/i);
+  if (ampParts.length > 1) {
+    for (const p of ampParts) {
+      const trimmed = p.trim();
+      if (trimmed) out.push(trimmed);
+    }
+  }
+  return out;
+}
+
+function collectShowActNames(show) {
+  const sorted = [...(show.acts || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const headRaw = sorted[0]?.name || show.title || '';
+  const headCandidates = splitCoBillParts(headRaw);
+  const allCandidates = [];
+  const seen = new Set();
+  const pushAll = (raw) => {
+    for (const part of splitCoBillParts(raw)) {
+      const key = cleanActForMatch(part);
+      if (key && !seen.has(key)) {
+        seen.add(key);
+        allCandidates.push(part);
+      }
+    }
+  };
+  for (const act of sorted) pushAll(act.name);
+  if (show.title) pushAll(show.title);
+  return { headCandidates, allCandidates };
+}
+
+/**
+ * Determine whether two show records represent the same concert.
+ * Checks metro, effective night date, fuzzy venue match, >=2h early/late set separation,
+ * and fuzzy act/co-bill/flipped-headliner matching.
+ */
+export function sameShow(a, b) {
+  if (!a || !b) return false;
+  if ((a.venue?.metro || '') !== (b.venue?.metro || '')) return false;
+
+  const nightA = effectiveShowDate(a.startsAt);
+  const nightB = effectiveShowDate(b.startsAt);
+  if (!nightA || !nightB || nightA !== nightB) return false;
+
+  if (!sameVenueName(a.venue?.name, b.venue?.name)) return false;
+
+  // Keep distinct early/late sets (>= 2h apart) separate when both start times are real.
+  if (!a.timeTba && !b.timeTba) {
+    const ta = Date.parse(a.startsAt);
+    const tb = Date.parse(b.startsAt);
+    if (Number.isFinite(ta) && Number.isFinite(tb) && Math.abs(ta - tb) >= TWO_HOURS_MS) {
+      return false;
+    }
+  }
+
+  const actsA = collectShowActNames(a);
+  const actsB = collectShowActNames(b);
+  if (actsA.allCandidates.length === 0 || actsB.allCandidates.length === 0) return false;
+
+  // 1. Headliner (or co-bill component of headliner) matches any billed act on the other record
+  for (const ha of actsA.headCandidates) {
+    for (const cb of actsB.allCandidates) {
+      if (actSimilarity(ha, cb) >= ACT_MATCH_THRESHOLD) return true;
+    }
+  }
+  for (const hb of actsB.headCandidates) {
+    for (const ca of actsA.allCandidates) {
+      if (actSimilarity(hb, ca) >= ACT_MATCH_THRESHOLD) return true;
+    }
+  }
+
+  // 2. Multi-act support overlap (>= 2 matching acts across the two bills)
+  let shared = 0;
+  for (const ca of actsA.allCandidates) {
+    if (actsB.allCandidates.some((cb) => actSimilarity(ca, cb) >= ACT_MATCH_THRESHOLD)) {
+      shared++;
+      if (shared >= 2) return true;
+    }
+  }
+
+  return false;
 }
 
 const GENRE_BY_LOWER = new Map([...ALLOWED_GENRES_SET].map((g) => [g.toLowerCase(), g]));
@@ -338,8 +732,27 @@ export function normalizeFeedShow(raw, fallbackMetro) {
   };
 }
 
+function findMatchingAct(act, candidates) {
+  if (!candidates || candidates.length === 0) return null;
+  const exactKey = normKeyPart(act.name);
+  if (exactKey) {
+    const exact = candidates.find((c) => normKeyPart(c.name) === exactKey);
+    if (exact) return exact;
+  }
+  let best = null;
+  let bestScore = ACT_MATCH_THRESHOLD;
+  for (const c of candidates) {
+    const score = actSimilarity(act.name, c.name);
+    if (score >= bestScore) {
+      bestScore = score;
+      best = c;
+    }
+  }
+  return best;
+}
+
 /** Merge two records representing the same show, preferring higher-priority source while enriching missing fields. */
-function mergeTwoShows(existing, incoming) {
+export function mergeTwoShows(existing, incoming) {
   const [primary, secondary] = (incoming.priority ?? 1) > (existing.priority ?? 1)
     ? [incoming, existing]
     : [existing, incoming];
@@ -355,18 +768,34 @@ function mergeTwoShows(existing, incoming) {
     : (secondary.venue.addressVisibility === 'public' && secondary.venue.address ? secondary.venue.address : undefined);
   const addressVisibility = address ? 'public' : (primary.venue.addressVisibility || secondary.venue.addressVisibility);
 
-  // Merge acts while keeping richer lineup and preserving any previewUrl / deezerArtistId links.
-  const actList = primary.acts.length >= secondary.acts.length ? primary.acts : secondary.acts;
-  const secondaryByNorm = new Map(secondary.acts.map((a) => [normKeyPart(a.name), a]));
-  const primaryByNorm = new Map(primary.acts.map((a) => [normKeyPart(a.name), a]));
-  const acts = actList.map((a, idx) => {
-    const key = normKeyPart(a.name);
-    const other = primaryByNorm.get(key) === a ? secondaryByNorm.get(key) : primaryByNorm.get(key);
+  // Prefer a concrete startsAt over a timeTba 20:00 placeholder even when the placeholder has higher priority.
+  const primaryHasRealTime = !primary.timeTba && Boolean(primary.startsAt);
+  const secondaryHasRealTime = !secondary.timeTba && Boolean(secondary.startsAt);
+  const startsAt = primaryHasRealTime
+    ? primary.startsAt
+    : (secondaryHasRealTime ? secondary.startsAt : (primary.startsAt || secondary.startsAt));
+  const timeTba = (primaryHasRealTime || secondaryHasRealTime)
+    ? undefined
+    : ((primary.timeTba || secondary.timeTba) ? true : undefined);
+
+  // Merge acts while keeping richer lineup and fuzzily enriching previewUrl / deezerArtistId links.
+  const primaryIsBase = primary.acts.length >= secondary.acts.length;
+  const baseActs = primaryIsBase ? primary.acts : secondary.acts;
+  const otherActs = primaryIsBase ? secondary.acts : primary.acts;
+  const acts = baseActs.map((a, idx) => {
+    const other = findMatchingAct(a, otherActs);
+    const pref = primaryIsBase ? a : (other || a);
+    const fallback = primaryIsBase ? other : a;
+    const previewUrl = pref?.previewUrl || fallback?.previewUrl;
+    const mergedLinks = (fallback?.links || pref?.links)
+      ? { ...(fallback?.links || {}), ...(pref?.links || {}) }
+      : undefined;
     return {
       ...other,
       ...a,
       order: idx,
-      ...(a.previewUrl || other?.previewUrl ? { previewUrl: a.previewUrl || other.previewUrl } : {}),
+      ...(previewUrl ? { previewUrl } : {}),
+      ...(mergedLinks ? { links: mergedLinks } : {}),
     };
   });
 
@@ -375,11 +804,12 @@ function mergeTwoShows(existing, incoming) {
   return {
     ...secondary,
     ...primary,
+    startsAt,
     status,
     title: primary.title || secondary.title,
     doorsAt: primary.doorsAt || secondary.doorsAt,
     endsAt: primary.endsAt || secondary.endsAt,
-    timeTba: primary.timeTba && secondary.timeTba ? true : undefined,
+    timeTba,
     venue: {
       ...secondary.venue,
       ...primary.venue,
@@ -402,28 +832,57 @@ function mergeTwoShows(existing, incoming) {
   };
 }
 
-/** Deduplicate and sort shows chronologically, filtering to the [today, today + windowDays] window. */
+/** Deduplicate and sort shows chronologically, filtering to the [today, today + windowDays] night window. */
 export function combineAndFilterShows(shows, { now = new Date(), windowDays = DEFAULT_WINDOW_DAYS } = {}) {
-  const byKey = new Map();
+  const windowByMetro = new Map();
+  const buckets = new Map();
+
   for (const s of shows) {
     if (!s) continue;
-    const wall = parseWallClock(s.startsAt);
-    if (!wall) continue;
-    const metro = getMetro(s.venue.metro);
-    const today = localYmd(now, metro.tz);
-    const maxDate = addDaysYmd(today, windowDays);
-    if (wall.date < today || wall.date > maxDate) continue;
+    const nightDate = effectiveShowDate(s.startsAt);
+    if (!nightDate) continue;
+    const metro = getMetro(s.venue?.metro);
+    let win = windowByMetro.get(metro.id);
+    if (!win) {
+      const today = effectiveLocalYmd(now, metro.tz);
+      win = { today, maxDate: addDaysYmd(today, windowDays) };
+      windowByMetro.set(metro.id, win);
+    }
+    if (nightDate < win.today || nightDate > win.maxDate) continue;
 
-    const k = dedupeKey(s);
-    const prev = byKey.get(k);
-    if (!prev) {
-      byKey.set(k, s);
+    const bucketKey = `${metro.id}|${nightDate}`;
+    let bucket = buckets.get(bucketKey);
+    if (!bucket) {
+      bucket = [];
+      buckets.set(bucketKey, bucket);
+    }
+
+    const matchIndices = [];
+    for (let i = 0; i < bucket.length; i++) {
+      if (sameShow(bucket[i], s)) matchIndices.push(i);
+    }
+
+    if (matchIndices.length === 0) {
+      bucket.push(s);
     } else {
-      byKey.set(k, mergeTwoShows(prev, s));
+      let merged = mergeTwoShows(bucket[matchIndices[0]], s);
+      // Merge any additional transitively matching entries (only if still compatible, so early/late sets never collapse)
+      for (let j = matchIndices.length - 1; j >= 1; j--) {
+        if (sameShow(merged, bucket[matchIndices[j]])) {
+          merged = mergeTwoShows(merged, bucket[matchIndices[j]]);
+          bucket.splice(matchIndices[j], 1);
+        }
+      }
+      bucket[matchIndices[0]] = merged;
     }
   }
 
-  return [...byKey.values()].sort((a, b) => {
+  const combined = [];
+  for (const bucket of buckets.values()) {
+    for (const show of bucket) combined.push(show);
+  }
+
+  return combined.sort((a, b) => {
     const tDiff = new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime();
     if (tDiff !== 0) return tDiff;
     return a.venue.name.localeCompare(b.venue.name) || headlinerName(a).localeCompare(headlinerName(b));

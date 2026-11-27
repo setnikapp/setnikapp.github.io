@@ -1573,16 +1573,111 @@ export function buildPlayerJs() {
     var activeGenre = 'all';
     var PAGE_SIZE = 40;
     var renderLimit = PAGE_SIZE;
+    var PAST_GRACE_MS = 3 * 60 * 60 * 1000;
     var metroCache = {};
     var requestSeq = 0;
+    var customDatesTouched = false;
 
-    if (dateFromInput && dateToInput && dateFromInput.value) {
-      var d0 = new Date(dateFromInput.value + 'T12:00:00Z');
-      if (!Number.isNaN(d0.getTime())) {
-        d0.setUTCDate(d0.getUTCDate() + 7);
-        dateToInput.value = d0.toISOString().slice(0, 10);
+    function addDaysYmd(ymd, days) {
+      var parts = String(ymd || '').split('-');
+      if (parts.length !== 3) return '';
+      var dt = new Date(Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]) + days));
+      return Number.isNaN(dt.getTime()) ? '' : dt.toISOString().slice(0, 10);
+    }
+
+    function dayOfWeekYmd(ymd) {
+      var parts = String(ymd || '').split('-');
+      if (parts.length !== 3) return 0;
+      return new Date(Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]))).getUTCDay();
+    }
+
+    function effectiveLocalYmd(nowDate, tz) {
+      try {
+        var opts = {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          hourCycle: 'h23'
+        };
+        if (tz) opts.timeZone = tz;
+        var parts = new Intl.DateTimeFormat('en-US', opts).formatToParts(nowDate);
+        var map = {};
+        for (var i = 0; i < parts.length; i++) map[parts[i].type] = parts[i].value;
+        if (!map.year || !map.month || !map.day) return '';
+        var ymd = map.year + '-' + map.month + '-' + map.day;
+        var hour = Number(map.hour) % 24;
+        return hour < 5 ? addDaysYmd(ymd, -1) : ymd;
+      } catch (_) {
+        return '';
       }
     }
+
+    function computeLiveDates(nowDate, tz, fallbackDates) {
+      var today = effectiveLocalYmd(nowDate, tz);
+      if (!today) return fallbackDates || null;
+      var tomorrow = addDaysYmd(today, 1);
+      var dow = dayOfWeekYmd(today);
+      var weekendStart;
+      var weekendEnd;
+      if (dow === 5) {
+        weekendStart = today;
+        weekendEnd = addDaysYmd(today, 2);
+      } else if (dow === 6) {
+        weekendStart = today;
+        weekendEnd = addDaysYmd(today, 1);
+      } else if (dow === 0) {
+        weekendStart = today;
+        weekendEnd = today;
+      } else {
+        weekendStart = addDaysYmd(today, 5 - dow);
+        weekendEnd = addDaysYmd(weekendStart, 2);
+      }
+      return {
+        today: today,
+        tomorrow: tomorrow,
+        weekendStart: weekendStart,
+        weekendEnd: weekendEnd,
+        weekEnd: addDaysYmd(today, 6),
+        nextWeekStart: addDaysYmd(today, 7),
+        nextWeekEnd: addDaysYmd(today, 13)
+      };
+    }
+
+    function syncCustomDateDefaults(liveToday) {
+      if (!dateFromInput && !dateToInput) return false;
+      var changed = false;
+      if (!customDatesTouched) {
+        if (liveToday) {
+          if (dateFromInput) {
+            dateFromInput.min = liveToday;
+            if (dateFromInput.value !== liveToday) {
+              dateFromInput.value = liveToday;
+              changed = true;
+            }
+          }
+          var nextTo = addDaysYmd(liveToday, 7);
+          if (dateToInput) {
+            dateToInput.min = liveToday;
+            if (nextTo && dateToInput.value !== nextTo) {
+              dateToInput.value = nextTo;
+              changed = true;
+            }
+          }
+        } else if (dateFromInput && dateToInput && dateFromInput.value) {
+          if (!dateToInput.value || dateToInput.value <= dateFromInput.value) {
+            var fallbackTo = addDaysYmd(dateFromInput.value, 7);
+            if (fallbackTo && dateToInput.value !== fallbackTo) {
+              dateToInput.value = fallbackTo;
+              changed = true;
+            }
+          }
+        }
+      }
+      return changed;
+    }
+
+    syncCustomDateDefaults(effectiveLocalYmd(new Date(), ''));
 
     function syncPressedButtons() {
       cityBtns.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-city-btn') === activeCity ? 'true' : 'false'); });
@@ -1623,8 +1718,14 @@ export function buildPlayerJs() {
 
       var ymdRx = /^\\d{4}-\\d{2}-\\d{2}$/;
       if (activeWhen === 'custom') {
-        if (dateFromInput && ymdRx.test(qFrom)) dateFromInput.value = qFrom;
-        if (dateToInput && ymdRx.test(qTo)) dateToInput.value = qTo;
+        if (dateFromInput && ymdRx.test(qFrom)) {
+          dateFromInput.value = qFrom;
+          customDatesTouched = true;
+        }
+        if (dateToInput && ymdRx.test(qTo)) {
+          dateToInput.value = qTo;
+          customDatesTouched = true;
+        }
       }
 
       syncPressedButtons();
@@ -1665,35 +1766,53 @@ export function buildPlayerJs() {
           return res.json();
         })
         .then(function (data) {
-          var shows = (data && Array.isArray(data.shows)) ? data.shows : [];
-          metroCache[id] = shows;
-          return shows;
+          var entry = {
+            tz: (data && typeof data.tz === 'string') ? data.tz : '',
+            dates: (data && data.dates && typeof data.dates === 'object') ? data.dates : null,
+            shows: (data && Array.isArray(data.shows)) ? data.shows : []
+          };
+          metroCache[id] = entry;
+          return entry;
         })
-        .catch(function () { return []; });
+        .catch(function () { return { tz: '', dates: null, shows: [] }; });
     }
 
     function loadShowsForCity(city) {
       if (city === 'all') {
-        return Promise.all(allMetroIds.map(loadMetro)).then(function (lists) {
+        return Promise.all(allMetroIds.map(loadMetro)).then(function (entries) {
           var merged = [];
-          lists.forEach(function (arr) { Array.prototype.push.apply(merged, arr); });
+          entries.forEach(function (entry) { Array.prototype.push.apply(merged, entry.shows); });
           merged.sort(function (a, b) { return (a.ts || 0) - (b.ts || 0); });
           return merged;
         });
       }
-      return loadMetro(city);
+      return loadMetro(city).then(function (entry) { return entry.shows; });
     }
 
-    function matchesWhen(show, when, customFrom, customTo) {
+    function showNightDate(show) {
+      return show.nd || show.d || '';
+    }
+
+    function matchesWhen(show, when, customFrom, customTo, liveDates, nowMs) {
+      if (show.ts && (nowMs - show.ts) > PAST_GRACE_MS) return false;
+      var nd = showNightDate(show);
+      if (when === 'custom') {
+        return Boolean(nd && (!customFrom || nd >= customFrom) && (!customTo || nd <= customTo));
+      }
+      if (when === 'all') return true;
+      if (liveDates) {
+        if (!nd) return false;
+        if (when === 'tonight') return nd === liveDates.today;
+        if (when === 'tomorrow') return nd === liveDates.tomorrow;
+        if (when === 'weekend') return nd >= liveDates.weekendStart && nd <= liveDates.weekendEnd;
+        if (when === 'this-week') return nd >= liveDates.today && nd <= liveDates.weekEnd;
+        if (when === 'next-week') return nd >= liveDates.nextWeekStart && nd <= liveDates.nextWeekEnd;
+      }
       if (when === 'tonight') return show.tn === 1;
       if (when === 'tomorrow') return show.tm === 1;
       if (when === 'weekend') return show.wk === 1;
       if (when === 'this-week') return show.tw === 1;
       if (when === 'next-week') return show.nw === 1;
-      if (when === 'custom') {
-        var cd = show.d || '';
-        return Boolean(cd && (!customFrom || cd >= customFrom) && (!customTo || cd <= customTo));
-      }
       return true;
     }
 
@@ -1884,16 +2003,38 @@ export function buildPlayerJs() {
       updateMoreLink();
       if (shouldUpdateUrl !== false) syncUrl();
 
-      var customFrom = dateFromInput ? dateFromInput.value : '';
-      var customTo = dateToInput ? dateToInput.value : '';
       var seq = ++requestSeq;
 
       if (expStatus) expStatus.textContent = 'Loading…';
 
       loadShowsForCity(activeCity).then(function (cityShows) {
         if (seq !== requestSeq) return;
+        var now = new Date();
+        var nowMs = now.getTime();
+        var liveDatesByMetro = {};
+        function getLiveDatesForMetro(metroId) {
+          if (!Object.prototype.hasOwnProperty.call(liveDatesByMetro, metroId)) {
+            var entry = metroCache[metroId];
+            liveDatesByMetro[metroId] = computeLiveDates(now, entry && entry.tz, entry && entry.dates);
+          }
+          return liveDatesByMetro[metroId];
+        }
+
+        var pickerToday = activeCity !== 'all'
+          ? ((getLiveDatesForMetro(activeCity) || {}).today || effectiveLocalYmd(now, ''))
+          : effectiveLocalYmd(now, '');
+        var datesChanged = syncCustomDateDefaults(pickerToday);
+        if (datesChanged && activeWhen === 'custom' && shouldUpdateUrl !== false) {
+          syncUrl();
+        }
+
+        var customFrom = dateFromInput ? dateFromInput.value : '';
+        var customTo = dateToInput ? dateToInput.value : '';
+
         var whenMatched = cityShows.filter(function (s) {
-          return matchesWhen(s, activeWhen, customFrom, customTo);
+          var mId = s.m || (activeCity !== 'all' ? activeCity : '');
+          var liveDates = getLiveDatesForMetro(mId);
+          return matchesWhen(s, activeWhen, customFrom, customTo, liveDates, nowMs);
         });
         updateGenreCounts(whenMatched);
 
@@ -1930,6 +2071,7 @@ export function buildPlayerJs() {
 
     if (dateFromInput) {
       dateFromInput.addEventListener('change', function () {
+        customDatesTouched = true;
         if (dateToInput && dateToInput.value && dateFromInput.value && dateToInput.value < dateFromInput.value) {
           dateToInput.value = dateFromInput.value;
         }
@@ -1938,6 +2080,7 @@ export function buildPlayerJs() {
     }
     if (dateToInput) {
       dateToInput.addEventListener('change', function () {
+        customDatesTouched = true;
         if (dateFromInput && dateFromInput.value && dateToInput.value && dateToInput.value < dateFromInput.value) {
           dateFromInput.value = dateToInput.value;
         }
@@ -1996,6 +2139,7 @@ export function buildPlayerJs() {
       activeCity = defaultCity;
       activeWhen = defaultWhen;
       activeGenre = 'all';
+      customDatesTouched = false;
       applyUrlParams();
       syncExplorer(true, false);
     });

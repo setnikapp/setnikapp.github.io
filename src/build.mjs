@@ -20,11 +20,13 @@ import {
   parseSiteUrl,
 } from './config.mjs';
 import { buildFaviconSvg, buildPlayerJs, buildStylesCss } from './assets.mjs';
-import { combineAndFilterShows, fetchLiveListings, headlinerName } from './fetch.mjs';
+import { combineAndFilterShows, fetchLiveListings, headlinerName, sameVenueName } from './fetch.mjs';
 import {
   addDaysYmd,
   canonicalUrl,
   dayOfWeek,
+  effectiveLocalYmd,
+  effectiveShowDate,
   formatDayNum,
   formatLongDate,
   formatMonthShort,
@@ -32,7 +34,6 @@ import {
   formatShortDate,
   formatShowTime,
   formatWeekdayShort,
-  localYmd,
   parseWallClock,
   safeWebUrl,
   slugify,
@@ -60,9 +61,9 @@ function writeOut(outDir, relPath, content) {
   fs.writeFileSync(full, content, 'utf8');
 }
 
-/** Determine the Fri–Sun weekend date range for a metro given `now`. */
+/** Determine the Fri–Sun weekend date range for a metro given `now` (with 5:00 AM rollover). */
 function getWeekendRange(now, tz) {
-  const today = localYmd(now, tz);
+  const today = effectiveLocalYmd(now, tz);
   const dow = dayOfWeek(today); // 0=Sun..6=Sat
   let start;
   let end;
@@ -85,38 +86,125 @@ function getWeekendRange(now, tz) {
   return { start, end, dateRangeLabel };
 }
 
-/** Assign collision-safe canonical leaf paths (/shows/YYYY-MM-DD-venue-slug-headliner-slug/) and venue paths. */
-function assignRoutes(shows) {
-  const usedLeafSlugs = new Set();
-  const venueSlugByKey = new Map();
-  const usedVenueSlugs = new Set();
-
-  // First pass: assign deterministic venue slugs
-  for (const s of shows) {
-    const vKey = `${s.venue.metro}|${s.venue.name.toLowerCase().trim()}`;
-    if (!venueSlugByKey.has(vKey)) {
-      let base = slugify(s.venue.name, 48);
-      let candidate = base;
-      if (usedVenueSlugs.has(candidate)) {
-        candidate = `${base}-${slugify(s.venue.metro, 12)}`;
-      }
-      let n = 2;
-      while (usedVenueSlugs.has(candidate)) {
-        candidate = `${base}-${n++}`;
-      }
-      usedVenueSlugs.add(candidate);
-      venueSlugByKey.set(vKey, candidate);
+function pickCanonicalVenueName(nameStats) {
+  const entries = [...nameStats.entries()];
+  entries.sort(([nameA, a], [nameB, b]) => {
+    if (b.maxPriority !== a.maxPriority) return b.maxPriority - a.maxPriority;
+    if (b.count !== a.count) return b.count - a.count;
+    if (Number(b.hasPublicAddress) !== Number(a.hasPublicAddress)) {
+      return Number(b.hasPublicAddress) - Number(a.hasPublicAddress);
     }
+    const awkwardA = /['’]\s+/.test(nameA) ? 1 : 0;
+    const awkwardB = /['’]\s+/.test(nameB) ? 1 : 0;
+    if (awkwardA !== awkwardB) return awkwardA - awkwardB;
+    if (nameA.length !== nameB.length) return nameA.length - nameB.length;
+    return nameA.localeCompare(nameB, 'en');
+  });
+  return entries[0][0];
+}
+
+/**
+ * Assign collision-safe canonical leaf paths (/shows/YYYY-MM-DD-venue-slug-headliner-slug/)
+ * and unified /venues/ paths by clustering equivalent venue spellings per metro.
+ */
+export function assignRoutes(shows) {
+  const usedLeafSlugs = new Set();
+  const usedVenueSlugs = new Set();
+  const clustersByMetro = new Map();
+  const allClusters = [];
+
+  const recordNameStat = (statsMap, rawName, show) => {
+    const prev = statsMap.get(rawName) || { count: 0, maxPriority: 0, hasPublicAddress: false };
+    prev.count += 1;
+    prev.maxPriority = Math.max(prev.maxPriority, show.priority ?? 1);
+    if (show.venue.addressVisibility === 'public' && show.venue.address) {
+      prev.hasPublicAddress = true;
+    }
+    statsMap.set(rawName, prev);
+  };
+
+  // First pass: cluster equivalent venue spellings per metro (e.g. Pianos/Piano's, Beanfield Theatre/Théâtre Beanfield)
+  const clusterForShow = new Map();
+  for (const s of shows) {
+    const metroId = s.venue.metro || 'nyc';
+    const rawName = String(s.venue.name || '').trim();
+    let metroClusters = clustersByMetro.get(metroId);
+    if (!metroClusters) {
+      metroClusters = [];
+      clustersByMetro.set(metroId, metroClusters);
+    }
+
+    const matched = [];
+    for (const c of metroClusters) {
+      for (const existingName of c.nameStats.keys()) {
+        if (sameVenueName(existingName, rawName)) {
+          matched.push(c);
+          break;
+        }
+      }
+    }
+
+    let target;
+    if (matched.length === 0) {
+      target = { metro: metroId, nameStats: new Map(), shows: [], canonicalName: rawName, slug: '' };
+      metroClusters.push(target);
+      allClusters.push(target);
+    } else {
+      target = matched[0];
+      // Merge any transitively matched clusters into target
+      for (let i = 1; i < matched.length; i++) {
+        const other = matched[i];
+        for (const [k, st] of other.nameStats.entries()) {
+          const prev = target.nameStats.get(k);
+          if (!prev) {
+            target.nameStats.set(k, { ...st });
+          } else {
+            prev.count += st.count;
+            prev.maxPriority = Math.max(prev.maxPriority, st.maxPriority);
+            prev.hasPublicAddress = prev.hasPublicAddress || st.hasPublicAddress;
+          }
+        }
+        for (const movedShow of other.shows) {
+          target.shows.push(movedShow);
+          clusterForShow.set(movedShow, target);
+        }
+        const mIdx = metroClusters.indexOf(other);
+        if (mIdx !== -1) metroClusters.splice(mIdx, 1);
+        const aIdx = allClusters.indexOf(other);
+        if (aIdx !== -1) allClusters.splice(aIdx, 1);
+      }
+    }
+
+    recordNameStat(target.nameStats, rawName, s);
+    target.shows.push(s);
+    clusterForShow.set(s, target);
   }
 
-  // Second pass: assign collision-safe show leaf slugs
+  // Assign one canonical display name & deterministic /venues/ slug per cluster
+  for (const cluster of allClusters) {
+    cluster.canonicalName = pickCanonicalVenueName(cluster.nameStats);
+    const base = slugify(cluster.canonicalName, 48);
+    let candidate = base;
+    if (usedVenueSlugs.has(candidate)) {
+      candidate = `${base}-${slugify(cluster.metro, 12)}`;
+    }
+    let n = 2;
+    while (usedVenueSlugs.has(candidate)) {
+      candidate = `${base}-${n++}`;
+    }
+    usedVenueSlugs.add(candidate);
+    cluster.slug = candidate;
+  }
+
+  // Second pass: assign collision-safe show leaf slugs using canonical venue name & slug
   return shows.map((s) => {
     const wall = parseWallClock(s.startsAt);
     const datePart = wall ? wall.date : 'upcoming';
-    const vKey = `${s.venue.metro}|${s.venue.name.toLowerCase().trim()}`;
-    const venueSlug = venueSlugByKey.get(vKey);
+    const cluster = clusterForShow.get(s);
+    const canonicalName = cluster.canonicalName;
+    const venueSlug = cluster.slug;
     const headSlug = slugify(headlinerName(s) || s.title || 'show', 40);
-    const baseSlug = `${datePart}-${slugify(s.venue.name, 32)}-${headSlug}`;
+    const baseSlug = `${datePart}-${slugify(canonicalName, 32)}-${headSlug}`;
 
     let leafSlug = baseSlug;
     let n = 2;
@@ -127,6 +215,10 @@ function assignRoutes(shows) {
 
     return {
       ...s,
+      venue: {
+        ...s.venue,
+        name: canonicalName,
+      },
       slug: leafSlug,
       pagePath: `/shows/${leafSlug}/`,
       venueSlug,
@@ -157,7 +249,7 @@ function buildCollections(routedShows, now) {
 
   for (const [mId, list] of showsByMetro.entries()) {
     const metro = getMetro(mId);
-    const today = localYmd(now, metro.tz);
+    const today = effectiveLocalYmd(now, metro.tz);
     const tomorrow = addDaysYmd(today, 1);
     const weekEnd = addDaysYmd(today, 6);
     const nextWeekStart = addDaysYmd(today, 7);
@@ -172,11 +264,12 @@ function buildCollections(routedShows, now) {
     for (const s of list) {
       const w = parseWallClock(s.startsAt);
       const d = w?.date || '';
-      const isTonight = Boolean(d && d === today);
-      const isTomorrow = Boolean(d && d === tomorrow);
-      const isWeekend = Boolean(d && d >= range.start && d <= range.end);
-      const isThisWeek = Boolean(d && d >= today && d <= weekEnd);
-      const isNextWeek = Boolean(d && d >= nextWeekStart && d <= nextWeekEnd);
+      const nd = effectiveShowDate(s.startsAt) || d;
+      const isTonight = Boolean(nd && nd === today);
+      const isTomorrow = Boolean(nd && nd === tomorrow);
+      const isWeekend = Boolean(nd && nd >= range.start && nd <= range.end);
+      const isThisWeek = Boolean(nd && nd >= today && nd <= weekEnd);
+      const isNextWeek = Boolean(nd && nd >= nextWeekStart && nd <= nextWeekEnd);
       s.isTonight = isTonight;
       s.isTomorrow = isTomorrow;
       s.isWeekend = isWeekend;
@@ -225,6 +318,7 @@ function buildCollections(routedShows, now) {
         tw: isThisWeek ? 1 : 0,
         nw: isNextWeek ? 1 : 0,
       };
+      if (nd && nd !== d) item.nd = nd;
       if (directPreview) item.pv = directPreview;
       if (deezerId) item.dz = deezerId;
       serializedShows.push(item);
@@ -232,6 +326,7 @@ function buildCollections(routedShows, now) {
 
     metroPayloads.set(metro.id, {
       metro: metro.id,
+      tz: metro.tz,
       dates: {
         today,
         tomorrow,
@@ -612,12 +707,12 @@ export async function buildSite({
   let musicEventSchemaCount = 0;
   let skippedSchemaCount = 0;
   for (const show of routedShows) {
-    const showDate = parseWallClock(show.startsAt)?.date;
+    const showNightDate = effectiveShowDate(show.startsAt);
     const sameVenueShows = routedShows
       .filter((other) => other.slug !== show.slug && other.venueSlug === show.venueSlug)
       .slice(0, 5);
     const sameNightShows = routedShows
-      .filter((other) => other.slug !== show.slug && other.venue.metro === show.venue.metro && parseWallClock(other.startsAt)?.date === showDate)
+      .filter((other) => other.slug !== show.slug && other.venue.metro === show.venue.metro && effectiveShowDate(other.startsAt) === showNightDate)
       .slice(0, 5);
 
     const rendered = renderShowLeafPage(show, { sameVenueShows, sameNightShows }, ctx);

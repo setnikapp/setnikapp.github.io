@@ -201,6 +201,40 @@ export function addDaysYmd(ymd, days) {
 }
 
 /**
+ * Effective night date (YYYY-MM-DD) for a show timestamp.
+ * Shows starting between 00:00 and 04:59 local wall-clock time belong to the previous night.
+ */
+export function effectiveShowDate(startsAt) {
+  const wall = typeof startsAt === 'object' && startsAt !== null && 'date' in startsAt
+    ? startsAt
+    : parseWallClock(startsAt);
+  if (!wall) return null;
+  return wall.hour < 5 ? addDaysYmd(wall.date, -1) : wall.date;
+}
+
+/**
+ * Effective local night date (YYYY-MM-DD) for a Date object in an IANA timezone.
+ * Local times from 00:00 to 04:59 belong to the previous night (5:00 AM rollover).
+ */
+export function effectiveLocalYmd(date, tz) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      hourCycle: 'h23',
+    })
+      .formatToParts(date)
+      .map((p) => [p.type, p.value]),
+  );
+  const ymd = `${parts.year}-${parts.month}-${parts.day}`;
+  const hour = Number(parts.hour) % 24;
+  return hour < 5 ? addDaysYmd(ymd, -1) : ymd;
+}
+
+/**
  * Compute an exact ISO-8601 timestamp with UTC offset for local date + time in an IANA timezone.
  * Used whenever an input record lacks an explicit offset (e.g., America/New_York -> -05:00 or -04:00).
  */

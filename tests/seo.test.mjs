@@ -3,7 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
+import vm from 'node:vm';
 
+import { buildPlayerJs } from '../src/assets.mjs';
 import { buildSite } from '../src/build.mjs';
 import { GOOGLE_PLAY_PACKAGE_ID, PRIMARY_CTA_LABEL } from '../src/config.mjs';
 import { playStoreUrl } from '../src/html.mjs';
@@ -123,6 +125,7 @@ describe('setnik-web static site SEO & compliance', () => {
         assert.ok(fs.existsSync(jsonPath), `Missing data/${mId}.json`);
         const payload = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
         assert.equal(payload.metro, mId);
+        assert.ok(typeof payload.tz === 'string' && payload.tz.includes('/'), `Missing IANA tz in data/${mId}.json`);
         assert.ok(Array.isArray(payload.shows) && payload.shows.length > 0);
         assert.ok(payload.shows[0].hn && payload.shows[0].sa && payload.shows[0].sl, `Missing hn/sa/sl in data/${mId}.json`);
         totalInMetroJson += payload.shows.length;
@@ -397,6 +400,400 @@ describe('setnik-web static site SEO & compliance', () => {
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it('clusters equivalent venue spellings into one /venues/ URL and emits tz + optional nd with 5:00 AM rollover', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'setnik-web-venues-'));
+    try {
+      // 2026-11-28T06:00:00Z = Saturday 01:00 AM EST (NYC/MTL) & Friday 10:00 PM PST (LA)
+      // Effective night date is Friday 2026-11-27 in all three metros.
+      const now = new Date('2026-11-28T06:00:00Z');
+      const shows = [
+        {
+          id: 'pianos-1',
+          startsAt: '2026-11-27T21:00:00-05:00',
+          priority: 3,
+          venue: { name: 'Pianos', neighborhood: 'Lower East Side', area: 'Manhattan', metro: 'nyc', city: 'New York, NY', address: '158 Ludlow St, New York, NY 10002', addressVisibility: 'public' },
+          acts: [{ name: 'Evening Band', order: 0 }],
+          genres: ['Indie Rock'],
+          price: { min: 15 },
+          status: 'scheduled',
+        },
+        {
+          id: 'pianos-2',
+          startsAt: '2026-11-28T01:30:00-05:00',
+          priority: 1,
+          venue: { name: 'Piano’s', neighborhood: 'Lower East Side', area: 'Manhattan', metro: 'nyc', city: 'New York, NY', address: '158 Ludlow St', addressVisibility: 'public' },
+          acts: [{ name: 'Late Night DJ', order: 0 }],
+          genres: ['Electronic'],
+          price: { min: 15 },
+          status: 'scheduled',
+        },
+        {
+          id: 'troub-1',
+          startsAt: '2026-11-28T20:00:00-08:00',
+          priority: 3,
+          venue: { name: 'The Troubadour', neighborhood: 'West Hollywood', area: 'West Hollywood', metro: 'la', city: 'West Hollywood, CA', address: '9081 Santa Monica Blvd, West Hollywood, CA 90069', addressVisibility: 'public' },
+          acts: [{ name: 'LA Band One', order: 0 }],
+          genres: ['Rock'],
+          price: { min: 25 },
+          status: 'scheduled',
+        },
+        {
+          id: 'troub-2',
+          startsAt: '2026-11-29T20:00:00-08:00',
+          priority: 1,
+          venue: { name: 'Troubadour', neighborhood: 'West Hollywood', area: 'West Hollywood', metro: 'la', city: 'West Hollywood, CA', address: '9081 Santa Monica Blvd', addressVisibility: 'public' },
+          acts: [{ name: 'LA Band Two', order: 0 }],
+          genres: ['Rock'],
+          price: { min: 25 },
+          status: 'scheduled',
+        },
+        {
+          id: 'beanfield-1',
+          startsAt: '2026-11-28T20:00:00-05:00',
+          priority: 3,
+          venue: { name: 'Beanfield Theatre', neighborhood: 'Saint-Henri', area: 'Montréal', metro: 'mtl', city: 'Montréal, QC', address: '2490 Rue Notre-Dame O, Montréal, QC H3J 1N5', addressVisibility: 'public' },
+          acts: [{ name: 'MTL Act One', order: 0 }],
+          genres: ['Indie Rock'],
+          price: { min: 30 },
+          status: 'scheduled',
+        },
+        {
+          id: 'beanfield-2',
+          startsAt: '2026-11-29T20:00:00-05:00',
+          priority: 1,
+          venue: { name: 'Théâtre Beanfield', neighborhood: 'Saint-Henri', area: 'Montréal', metro: 'mtl', city: 'Montréal, QC', address: '2490 Rue Notre-Dame O', addressVisibility: 'public' },
+          acts: [{ name: 'MTL Act Two', order: 0 }],
+          genres: ['Indie Rock'],
+          price: { min: 30 },
+          status: 'scheduled',
+        },
+        {
+          id: 'olympia-1',
+          startsAt: '2026-11-28T20:00:00-05:00',
+          priority: 3,
+          venue: { name: "L' Olympia Theatre", neighborhood: 'Ville-Marie', area: 'Montréal', metro: 'mtl', city: 'Montréal, QC', address: '1004 Rue Sainte-Catherine E, Montréal, QC H2L 2G2', addressVisibility: 'public' },
+          acts: [{ name: 'Olympia Act One', order: 0 }],
+          genres: ['Pop'],
+          price: { min: 35 },
+          status: 'scheduled',
+        },
+        {
+          id: 'olympia-2',
+          startsAt: '2026-11-29T20:00:00-05:00',
+          priority: 1,
+          venue: { name: 'L’ Olympia Theatre', neighborhood: 'Ville-Marie', area: 'Montréal', metro: 'mtl', city: 'Montréal, QC', address: '1004 Rue Sainte-Catherine E', addressVisibility: 'public' },
+          acts: [{ name: 'Olympia Act Two', order: 0 }],
+          genres: ['Pop'],
+          price: { min: 35 },
+          status: 'scheduled',
+        },
+      ];
+
+      const summary = await buildSite({
+        outDir: tmpDir,
+        siteUrl: 'https://setnik.example',
+        now,
+        customData: { shows, flags: { jambaseEnabled: true, deezerEnabled: true }, attribution: [] },
+        log: { info: () => {}, warn: () => {} },
+      });
+
+      // 8 shows across 4 physical rooms -> exactly 4 unified /venues/ pages
+      assert.equal(summary.totalShows, 8);
+      assert.equal(summary.venueCount, 4);
+      const venueDirs = fs.readdirSync(path.join(tmpDir, 'venues')).filter((e) => !e.endsWith('.html')).sort();
+      assert.deepEqual(venueDirs, ['beanfield-theatre', 'l-olympia-theatre', 'pianos', 'the-troubadour']);
+
+      // Verify /data/{metro}.json emits tz and optional nd only on after-midnight shows
+      const nycJson = JSON.parse(fs.readFileSync(path.join(tmpDir, 'data/nyc.json'), 'utf8'));
+      const laJson = JSON.parse(fs.readFileSync(path.join(tmpDir, 'data/la.json'), 'utf8'));
+      const mtlJson = JSON.parse(fs.readFileSync(path.join(tmpDir, 'data/mtl.json'), 'utf8'));
+
+      assert.equal(nycJson.tz, 'America/New_York');
+      assert.equal(laJson.tz, 'America/Los_Angeles');
+      assert.equal(mtlJson.tz, 'America/Toronto');
+      assert.equal(nycJson.dates.today, '2026-11-27');
+
+      const eveningItem = nycJson.shows.find((s) => s.hn === 'Evening Band');
+      const lateItem = nycJson.shows.find((s) => s.hn === 'Late Night DJ');
+      assert.equal(eveningItem.v, 'Pianos');
+      assert.equal(lateItem.v, 'Pianos');
+      assert.equal(lateItem.vp, '/venues/pianos/');
+      assert.equal(eveningItem.d, '2026-11-27');
+      assert.equal(eveningItem.nd, undefined);
+      assert.equal(lateItem.d, '2026-11-28');
+      assert.equal(lateItem.nd, '2026-11-27');
+      assert.equal(lateItem.tn, 1);
+
+      // All clustered shows share one canonical name & /venues/ URL
+      assert.ok(laJson.shows.every((s) => s.v === 'The Troubadour' && s.vp === '/venues/the-troubadour/'));
+      assert.ok(
+        mtlJson.shows
+          .filter((s) => s.hn.startsWith('MTL Act'))
+          .every((s) => s.v === 'Beanfield Theatre' && s.vp === '/venues/beanfield-theatre/'),
+      );
+      assert.ok(
+        mtlJson.shows
+          .filter((s) => s.hn.startsWith('Olympia Act'))
+          .every((s) => s.v === "L' Olympia Theatre" && s.vp === '/venues/l-olympia-theatre/'),
+      );
+
+      // Tonight hub at 1:00 AM EST Sat includes both Fri 9 PM and Sat 1:30 AM shows
+      const tonightHtml = fs.readFileSync(path.join(tmpDir, 'nyc-concerts-tonight/index.html'), 'utf8');
+      assert.ok(tonightHtml.includes('Evening Band'));
+      assert.ok(tonightHtml.includes('Late Night DJ'));
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('computes live client-side dates in city IANA tz with 5:00 AM rollover, hides >3h past shows, and advances stale custom dates', async () => {
+    const playerCode = buildPlayerJs();
+    // Ensure generated player.js has valid JavaScript syntax
+    assert.doesNotThrow(() => new Function(playerCode));
+
+    const makeMockElement = (tag, attrs = {}) => {
+      const listeners = {};
+      const classSet = new Set();
+      const children = [];
+      const attrMap = { ...attrs };
+      let textVal = '';
+      const node = {
+        tagName: tag.toUpperCase(),
+        value: attrs.value || '',
+        min: attrs.min || '',
+        hidden: false,
+        get textContent() { return textVal; },
+        set textContent(v) {
+          textVal = v == null ? '' : String(v);
+          children.length = 0;
+        },
+        href: '',
+        className: '',
+        children,
+        classList: {
+          add: (c) => classSet.add(c),
+          remove: (c) => classSet.delete(c),
+          toggle: (c, force) => (force ? classSet.add(c) : classSet.delete(c)),
+          contains: (c) => classSet.has(c),
+        },
+        getAttribute: (k) => (Object.prototype.hasOwnProperty.call(attrMap, k) ? attrMap[k] : null),
+        setAttribute: (k, v) => { attrMap[k] = String(v); },
+        addEventListener: (ev, fn) => {
+          listeners[ev] = listeners[ev] || [];
+          listeners[ev].push(fn);
+        },
+        dispatch: (ev) => {
+          (listeners[ev] || []).forEach((fn) => fn({ target: node }));
+        },
+        appendChild: (child) => {
+          if (child && child._isFragment) {
+            children.push(...child.children);
+          } else {
+            children.push(child);
+          }
+          return child;
+        },
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      };
+      return node;
+    };
+
+    const collectText = (node) => {
+      if (!node) return '';
+      if (node._isText) return node.textContent;
+      return (node.textContent || '') + (node.children || []).map(collectText).join(' ');
+    };
+
+    const runExplorerSession = async ({ fakeNowIso, urlSearch = '', payloads }) => {
+      let currentNowMs = Date.parse(fakeNowIso);
+      const RealDate = Date;
+      function MockDate(...args) {
+        if (!(this instanceof MockDate)) return new RealDate(currentNowMs).toString();
+        if (args.length === 0) return new RealDate(currentNowMs);
+        return new RealDate(...args);
+      }
+      MockDate.now = () => currentNowMs;
+      MockDate.UTC = RealDate.UTC;
+      MockDate.parse = RealDate.parse;
+      MockDate.prototype = RealDate.prototype;
+
+      const cityNyc = makeMockElement('button', { 'data-city-btn': 'nyc', 'data-metro-slug': 'nyc', 'data-metro-name': 'NYC', 'data-metro-total': '4', 'data-hub-href': '/nyc-live-music/', 'data-tonight-href': '/nyc-concerts-tonight/', 'data-weekend-href': '/nyc-shows-this-weekend/' });
+      const cityLa = makeMockElement('button', { 'data-city-btn': 'la', 'data-metro-slug': 'la', 'data-metro-name': 'LA', 'data-metro-total': '2', 'data-hub-href': '/la-live-music/', 'data-tonight-href': '/la-concerts-tonight/', 'data-weekend-href': '/la-shows-this-weekend/' });
+      const whenTonight = makeMockElement('button', { 'data-when-btn': 'tonight' });
+      const whenTomorrow = makeMockElement('button', { 'data-when-btn': 'tomorrow' });
+      const whenWeekend = makeMockElement('button', { 'data-when-btn': 'weekend' });
+      const whenThisWeek = makeMockElement('button', { 'data-when-btn': 'this-week' });
+      const whenNextWeek = makeMockElement('button', { 'data-when-btn': 'next-week' });
+      const whenCustom = makeMockElement('button', { 'data-when-btn': 'custom' });
+      const whenAll = makeMockElement('button', { 'data-when-btn': 'all' });
+      const genreAll = makeMockElement('button', { 'data-genre-btn': 'all', 'data-genre-label': 'All' });
+      const customBar = makeMockElement('div');
+      // Stale build-time custom date defaults (3 days old!)
+      const dateFromInput = makeMockElement('input', { value: '2026-11-24', min: '2026-11-24' });
+      const dateToInput = makeMockElement('input', { value: '2026-11-24', min: '2026-11-24' });
+      const listEl = makeMockElement('div');
+      const loadMoreWrap = makeMockElement('div');
+      const loadMoreBtn = makeMockElement('button');
+      const expStatus = makeMockElement('span');
+      const expMore = makeMockElement('a');
+      const expEmpty = makeMockElement('div');
+
+      const explorer = makeMockElement('section', {
+        'data-base-path': '',
+        'data-deezer-enabled': '1',
+        'data-metros': 'nyc,la',
+        'data-default-metro': 'nyc',
+        'data-default-when': 'tonight',
+      });
+      explorer.querySelector = (sel) => ({
+        '[data-custom-dates]': customBar,
+        '[data-date-from]': dateFromInput,
+        '[data-date-to]': dateToInput,
+        '[data-explorer-list]': listEl,
+        '[data-explorer-load-more]': loadMoreWrap,
+        '[data-load-more-btn]': loadMoreBtn,
+        '[data-explorer-status]': expStatus,
+        '[data-explorer-more]': expMore,
+        '[data-explorer-empty]': expEmpty,
+      }[sel] || null);
+      explorer.querySelectorAll = (sel) => ({
+        '[data-city-btn]': [cityNyc, cityLa],
+        '[data-when-btn]': [whenTonight, whenTomorrow, whenWeekend, whenThisWeek, whenNextWeek, whenCustom, whenAll],
+        '[data-genre-btn]': [genreAll],
+      }[sel] || []);
+
+      const doc = {
+        body: { classList: { add: () => {}, remove: () => {} } },
+        head: { appendChild: () => {} },
+        addEventListener: () => {},
+        querySelector: (sel) => (sel === '[data-home-explorer]' ? explorer : null),
+        querySelectorAll: () => [],
+        createElement: (tag) => makeMockElement(tag),
+        createTextNode: (text) => ({ _isText: true, textContent: String(text) }),
+        createDocumentFragment: () => ({ _isFragment: true, children: [], appendChild(c) { this.children.push(c); return c; } }),
+      };
+
+      const win = {
+        location: {
+          href: `https://setnik.example/${urlSearch}`,
+          origin: 'https://setnik.example',
+          pathname: '/',
+          search: urlSearch,
+          hash: '',
+        },
+        history: { replaceState: () => {} },
+        addEventListener: () => {},
+      };
+
+      const sandbox = {
+        Date: MockDate,
+        Intl,
+        URL,
+        URLSearchParams,
+        Promise,
+        Number,
+        String,
+        Array,
+        Object,
+        Boolean,
+        Error,
+        RegExp,
+        setTimeout,
+        clearTimeout,
+        encodeURIComponent,
+        navigator: { userAgent: '' },
+        window: win,
+        document: doc,
+        fetch: (url) => {
+          const m = /\/data\/([^/.]+)\.json/.exec(url);
+          const data = m ? payloads[m[1]] : null;
+          return Promise.resolve({
+            ok: Boolean(data),
+            status: data ? 200 : 404,
+            json: () => Promise.resolve(data),
+          });
+        },
+      };
+
+      vm.runInNewContext(playerCode, sandbox);
+      const flush = () => new Promise((r) => setTimeout(r, 15));
+      await flush();
+
+      return {
+        setNow: (iso) => { currentNowMs = Date.parse(iso); },
+        click: async (btn) => { btn.dispatch('click'); await flush(); },
+        text: () => collectText(listEl),
+        status: () => expStatus.textContent,
+        dateFromInput,
+        dateToInput,
+        buttons: { cityNyc, cityLa, whenTonight, whenTomorrow, whenWeekend, whenThisWeek, whenNextWeek, whenCustom, whenAll },
+      };
+    };
+
+    // Build-time flags (tn/tm/wk/tw/nw) are intentionally STALE (all 0) to prove client computes dates live from data.tz!
+    const payloads = {
+      nyc: {
+        metro: 'nyc',
+        tz: 'America/New_York',
+        dates: { today: '2026-11-24' },
+        shows: [
+          { p: '/shows/past/', sl: 'past', n: 'Past Over 3h Show', hn: 'Past', d: '2026-11-27', dl: 'Friday, November 27, 2026', sa: '2026-11-27T23:00:00-05:00', ts: Date.parse('2026-11-27T23:00:00-05:00'), v: 'V1', vp: '/venues/v1/', m: 'nyc', g: [], tn: 0, tm: 0, wk: 0, tw: 0, nw: 0 },
+          { p: '/shows/late/', sl: 'late', n: 'After Midnight Live Set', hn: 'Late', d: '2026-11-28', nd: '2026-11-27', dl: 'Saturday, November 28, 2026', sa: '2026-11-28T01:30:00-05:00', ts: Date.parse('2026-11-28T01:30:00-05:00'), v: 'V1', vp: '/venues/v1/', m: 'nyc', g: [], tn: 0, tm: 0, wk: 0, tw: 0, nw: 0 },
+          { p: '/shows/sat/', sl: 'sat', n: 'Saturday Evening Show', hn: 'Sat', d: '2026-11-28', dl: 'Saturday, November 28, 2026', sa: '2026-11-28T20:00:00-05:00', ts: Date.parse('2026-11-28T20:00:00-05:00'), v: 'V1', vp: '/venues/v1/', m: 'nyc', g: [], tn: 0, tm: 0, wk: 0, tw: 0, nw: 0 },
+          { p: '/shows/nextwk/', sl: 'nextwk', n: 'Next Week Show', hn: 'Next', d: '2026-12-05', dl: 'Saturday, December 5, 2026', sa: '2026-12-05T20:00:00-05:00', ts: Date.parse('2026-12-05T20:00:00-05:00'), v: 'V1', vp: '/venues/v1/', m: 'nyc', g: [], tn: 0, tm: 0, wk: 0, tw: 0, nw: 0 },
+        ],
+      },
+      la: {
+        metro: 'la',
+        tz: 'America/Los_Angeles',
+        dates: { today: '2026-11-24' },
+        shows: [
+          { p: '/shows/la-late/', sl: 'la-late', n: 'LA Late Friday Set', hn: 'LA Late', d: '2026-11-28', nd: '2026-11-27', dl: 'Saturday, November 28, 2026', sa: '2026-11-28T01:30:00-08:00', ts: Date.parse('2026-11-28T01:30:00-08:00'), v: 'V2', vp: '/venues/v2/', m: 'la', g: [], tn: 0, tm: 0, wk: 0, tw: 0, nw: 0 },
+          { p: '/shows/la-sat/', sl: 'la-sat', n: 'LA Saturday Show', hn: 'LA Sat', d: '2026-11-28', dl: 'Saturday, November 28, 2026', sa: '2026-11-28T20:00:00-08:00', ts: Date.parse('2026-11-28T20:00:00-08:00'), v: 'V2', vp: '/venues/v2/', m: 'la', g: [], tn: 0, tm: 0, wk: 0, tw: 0, nw: 0 },
+        ],
+      },
+    };
+
+    // 1. At 2026-11-28T08:00:00Z = Saturday 03:00 AM EST (NYC effective night = Friday 2026-11-27)
+    const session = await runExplorerSession({ fakeNowIso: '2026-11-28T08:00:00Z', payloads });
+    // Past 23:00 show is 4h old (>3h) -> hidden; 01:30 AM show (nd=2026-11-27) is 1.5h old -> visible in Tonight!
+    assert.ok(!session.text().includes('Past Over 3h Show'), 'Show >3h past start must be hidden');
+    assert.ok(session.text().includes('After Midnight Live Set'), 'After-midnight show (nd=2026-11-27) must appear in Tonight before 5 AM');
+    assert.ok(!session.text().includes('Saturday Evening Show'), 'Saturday night show must not appear in Friday Tonight');
+    // Stale default custom-date pickers advanced from 2026-11-24 -> 2026-11-27 / 2026-12-04
+    assert.equal(session.dateFromInput.value, '2026-11-27');
+    assert.equal(session.dateFromInput.min, '2026-11-27');
+    assert.equal(session.dateToInput.value, '2026-12-04');
+
+    // Tomorrow (2026-11-28) shows Saturday Evening Show; Next Week shows 2026-12-05
+    await session.click(session.buttons.whenTomorrow);
+    assert.ok(session.text().includes('Saturday Evening Show'));
+    assert.ok(!session.text().includes('After Midnight Live Set'));
+    await session.click(session.buttons.whenNextWeek);
+    assert.ok(session.text().includes('Next Week Show'));
+
+    // 2. Advance clock to 2026-11-28T10:30:00Z = 05:30 AM EST (NYC rolled to Sat 2026-11-28) vs 02:30 AM PST (LA still Fri 2026-11-27!)
+    session.setNow('2026-11-28T10:30:00Z');
+    await session.click(session.buttons.whenTonight);
+    assert.ok(session.text().includes('Saturday Evening Show'), 'NYC after 5 AM rolls Tonight to Saturday');
+    assert.ok(!session.text().includes('After Midnight Live Set'), 'NYC after 5 AM drops Friday-night show from Tonight');
+
+    await session.click(session.buttons.cityLa);
+    assert.ok(session.text().includes('LA Late Friday Set'), 'LA at 2:30 AM PST still treats Friday night as Tonight');
+    assert.ok(!session.text().includes('LA Saturday Show'));
+
+    // 3. Explicit URL custom dates are never overwritten by default advancement
+    const customSession = await runExplorerSession({
+      fakeNowIso: '2026-11-28T08:00:00Z',
+      urlSearch: '?city=nyc&when=custom&from=2026-12-05&to=2026-12-10',
+      payloads,
+    });
+    assert.equal(customSession.dateFromInput.value, '2026-12-05');
+    assert.equal(customSession.dateToInput.value, '2026-12-10');
+    assert.ok(customSession.text().includes('Next Week Show'));
   });
 
   it('contains no personal account handle or legacy app names in any repository file', () => {
