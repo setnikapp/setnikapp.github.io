@@ -70,12 +70,12 @@ def _render_show_card_html(show: dict[str, Any] | None, palette: dict[str, str])
     headliner = html.escape(str(show.get("headliner") or ""))
     venue = html.escape(str(show.get("venue") or ""))
     neighborhood = html.escape(str(show.get("neighborhood") or ""))
-    when_bits = [
-        str(show.get("weekday") or ""),
-        str(show.get("short_date") or ""),
-        str(show.get("time") or ""),
-    ]
-    when_str = html.escape(" · ".join(b for b in when_bits if b))
+    short_date = str(show.get("short_date") or "").strip()
+    weekday = str(show.get("weekday") or "").strip()
+    time_str = str(show.get("time") or "").strip()
+    date_part = short_date if (short_date and (not weekday or weekday in short_date)) else f"{weekday} {short_date}".strip()
+    when_bits = [b for b in (date_part, time_str) if b]
+    when_str = html.escape(" · ".join(when_bits))
     price = html.escape(str(show.get("price_text") or ""))
     genres = [html.escape(str(g)) for g in (show.get("genres") or [])[:3]]
     genre_pills = "".join(f'<span class="pill">{g}</span>' for g in genres)

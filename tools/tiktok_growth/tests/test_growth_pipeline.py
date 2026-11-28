@@ -245,6 +245,9 @@ class TestEndToEndGrowthPipelineAndWorkflows(unittest.TestCase):
                 allow_tts_network=False,
             )
             self.assertTrue(manifest_path.is_file())
+            inv_text = (work_dir / "inventory.json").read_text(encoding="utf-8")
+            self.assertNotIn("undefined", inv_text)
+            self.assertNotIn("NaN", inv_text)
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(len(manifest["carousels"]), 1)
             self.assertEqual(len(manifest["videos"]), 1)
