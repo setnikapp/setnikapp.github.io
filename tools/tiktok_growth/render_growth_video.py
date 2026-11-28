@@ -75,25 +75,34 @@ def _probe_duration(media_path: Path) -> float:
     return max(0.5, float(out))
 
 
-async def _synthesize_edge_tts_async(text: str, voice: str, out_mp3: Path) -> None:
-    import edge_tts  # imported lazily so module works even without edge-tts installed
-
-    communicate = edge_tts.Communicate(text=text, voice=voice, rate="+6%")
-    await communicate.save(str(out_mp3))
-
-
 def synthesize_scene_voiceover(
     text: str,
     voice: str,
     out_mp3: Path,
     allow_network: bool = True,
 ) -> float | None:
-    """Generate scene voiceover MP3 via edge-tts and return its duration in seconds (or None on fallback)."""
+    """Generate scene voiceover MP3 via edge-tts subprocess (safe inside Playwright's event loop)."""
     clean = (text or "").strip()
     if not clean or not allow_network:
         return None
     try:
-        asyncio.run(_synthesize_edge_tts_async(clean, voice, out_mp3))
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "edge_tts",
+                "--voice",
+                voice,
+                "--rate=+6%",
+                "--text",
+                clean,
+                "--write-media",
+                str(out_mp3),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=45,
+        )
         if out_mp3.is_file() and out_mp3.stat().st_size > 256:
             return _probe_duration(out_mp3)
     except Exception as exc:
