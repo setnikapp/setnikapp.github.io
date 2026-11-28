@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
   actSimilarity,
   cleanActForMatch,
+  cleanPrice,
   combineAndFilterShows,
   mergeTwoShows,
   normalizeFeedShow,
@@ -408,5 +409,54 @@ describe('Supabase & feed normalization + deduplication', () => {
       windowDays: 30,
     });
     assert.equal(afterRollover.length, 0);
+  });
+
+  it('coerces string prices, normalizes $0 to isFree, detects explicit free titles, and merges partial price objects', () => {
+    assert.deepEqual(cleanPrice({ min: '$15', max: '20.50' }), { min: 15, max: 20.5 });
+    assert.deepEqual(cleanPrice('$18 ADV / $22 DOS'), { min: 18, max: 22 });
+    assert.deepEqual(cleanPrice('Free / NOTAFLOF'), { isFree: true, notaflof: true });
+    assert.deepEqual(cleanPrice({ min: 0, max: 0 }), { isFree: true });
+    assert.deepEqual(cleanPrice({ min: 25, max: 15 }), { min: 15, max: 25 });
+    assert.deepEqual(cleanPrice({}, 'Sunday Jazz (Free Show)'), { isFree: true });
+    assert.deepEqual(cleanPrice({}, 'Late Night — No Cover'), { isFree: true });
+    // Band names containing "Free" must NOT be misclassified as free shows
+    assert.deepEqual(cleanPrice({}, 'Free Throw'), {});
+    assert.deepEqual(cleanPrice({}, 'Free Range'), {});
+
+    // Partial primary price ({ notaflof: true }) inherits secondary numeric price without losing notaflof
+    const fpNotaflof = normalizeFpRow({
+      id: 'fp-notaflof',
+      metro: 'nyc',
+      venueName: 'Trans-Pecos',
+      city: 'Ridgewood, NY',
+      address: '915 Wyckoff Ave, Ridgewood, NY 11385',
+      addressMode: 'registry',
+      localDate: '2026-11-27',
+      startLocal: '20:00',
+      startsAt: '2026-11-27T20:00:00-05:00',
+      headliner: 'Asher White',
+      price: { notaflof: true },
+      status: 'scheduled',
+      genres: ['Experimental'],
+      sources: [{ sourceType: 'flyer', licence: 'first_party' }],
+    }, 'nyc');
+
+    const feedPriced = normalizeFeedShow({
+      id: 'feed-priced',
+      startsAt: '2026-11-27T20:00:00-05:00',
+      venue: { name: 'Trans-Pecos', metro: 'nyc', city: 'Ridgewood, NY', address: '915 Wyckoff Ave', addressVisibility: 'public' },
+      acts: [{ name: 'Asher White', order: 0 }],
+      genres: ['Experimental'],
+      price: { min: '15', max: '$20' },
+      status: 'scheduled',
+    }, 'nyc');
+
+    const merged = mergeTwoShows(fpNotaflof, feedPriced);
+    assert.deepEqual(merged.price, { min: 15, max: 20, notaflof: true });
+
+    // Concrete primary numeric price still wins cleanly without leaking secondary max
+    const fpNumeric = { ...fpNotaflof, price: { min: 12 } };
+    const mergedNumeric = mergeTwoShows(fpNumeric, { ...feedPriced, price: { min: 15, max: 25, notaflof: true } });
+    assert.deepEqual(mergedNumeric.price, { min: 12, notaflof: true });
   });
 });

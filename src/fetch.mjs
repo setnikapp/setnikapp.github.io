@@ -462,13 +462,84 @@ function cleanGenres(rawGenres) {
   return out;
 }
 
-function cleanPrice(raw) {
-  if (!raw || typeof raw !== 'object') return {};
+const EXPLICIT_FREE_TITLE_RX =
+  /(?:^|[\s\-–—:(/\[])(?:free\s+(?:show|admission|entry|concert|event|music|jazz|gig|night|live)|no\s+cover)(?:$|[\s\-–—:)/\]!.,])|\((?:free|no\s+cover)\)|\[(?:free|no\s+cover)\]/i;
+
+function parsePriceAmount(val) {
+  if (typeof val === 'number') {
+    return Number.isFinite(val) && val >= 0 ? val : undefined;
+  }
+  if (typeof val === 'string') {
+    const cleaned = val.trim().replace(/^(?:US|CA|C)?\$\s*/i, '').replace(/,/g, '');
+    if (!/^\d+(?:\.\d{1,2})?$/.test(cleaned)) return undefined;
+    const n = Number(cleaned);
+    return Number.isFinite(n) && n >= 0 ? n : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Normalize a price object or string (coercing "$15"/"15", normalizing $0 to isFree,
+ * and detecting explicit free-show/no-cover cues in an optional event title).
+ */
+export function cleanPrice(raw, fallbackTitle = '') {
+  let min;
+  let max;
+  let isFree = false;
+  let notaflof = false;
+
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (/\b(free|no\s+cover)\b/i.test(s)) isFree = true;
+    if (/\b(notaflof|sliding\s+scale|pay\s+what\s+you\s+can|pwyc|donation)\b/i.test(s)) notaflof = true;
+    const amounts = [...s.matchAll(/\$\s*(\d+(?:\.\d{1,2})?)/g)]
+      .map((m) => Number(m[1]))
+      .filter((n) => Number.isFinite(n) && n >= 0);
+    if (amounts.length === 1) {
+      min = amounts[0];
+    } else if (amounts.length >= 2) {
+      min = Math.min(...amounts);
+      max = Math.max(...amounts);
+    } else if (!isFree) {
+      min = parsePriceAmount(s);
+    }
+  } else if (raw && typeof raw === 'object') {
+    min = parsePriceAmount(raw.min ?? raw.priceMin ?? raw.price_min ?? raw.amount);
+    max = parsePriceAmount(raw.max ?? raw.priceMax ?? raw.price_max);
+    isFree = raw.isFree === true || raw.is_free === true;
+    notaflof = raw.notaflof === true;
+  }
+
+  if (min != null && max != null && max < min) {
+    [min, max] = [max, min];
+  }
+  if (min === 0 && (max == null || max === 0)) {
+    isFree = true;
+    min = undefined;
+    max = undefined;
+  }
+  if (!isFree && min == null && max == null && typeof fallbackTitle === 'string' && EXPLICIT_FREE_TITLE_RX.test(fallbackTitle)) {
+    isFree = true;
+  }
+
   return {
-    ...(typeof raw.min === 'number' && Number.isFinite(raw.min) ? { min: raw.min } : {}),
-    ...(typeof raw.max === 'number' && Number.isFinite(raw.max) ? { max: raw.max } : {}),
-    ...(raw.isFree === true ? { isFree: true } : {}),
-    ...(raw.notaflof === true ? { notaflof: true } : {}),
+    ...(min != null ? { min } : {}),
+    ...(max != null ? { max } : {}),
+    ...(isFree ? { isFree: true } : {}),
+    ...(notaflof ? { notaflof: true } : {}),
+  };
+}
+
+function mergePrices(primaryPrice, secondaryPrice) {
+  const p = primaryPrice || {};
+  const s = secondaryPrice || {};
+  const pHasValue = p.isFree === true || p.min != null || p.max != null;
+  const sHasValue = s.isFree === true || s.min != null || s.max != null;
+  const base = pHasValue ? p : (sHasValue ? s : {});
+  const notaflof = p.notaflof === true || s.notaflof === true;
+  return {
+    ...base,
+    ...(notaflof ? { notaflof: true } : {}),
   };
 }
 
@@ -589,7 +660,12 @@ export function normalizeFpRow(r, fallbackMetro) {
     },
     acts,
     genres: cleanGenres(r.genres),
-    price: cleanPrice(r.price),
+    price: cleanPrice(
+      r.price ?? (r.price_min != null || r.price_max != null || r.is_free === true
+        ? { min: r.price_min, max: r.price_max, isFree: r.is_free === true, notaflof: r.notaflof === true }
+        : null),
+      typeof r.title === 'string' ? r.title : '',
+    ),
     ...(imageUrl ? { flyerImages: [imageUrl] } : {}),
     ticketUrl: safeWebUrl(r.ticketUrl) ?? undefined,
     previewUrl: safeWebUrl(r.previewUrl ?? r.preview_url) ?? undefined,
@@ -652,10 +728,11 @@ export function normalizeSubmissionRow(row) {
     acts,
     genres: cleanGenres(row.genres),
     price: cleanPrice({
-      min: row.price_min != null ? Number(row.price_min) : undefined,
-      max: row.price_max != null ? Number(row.price_max) : undefined,
+      min: row.price_min,
+      max: row.price_max,
       isFree: row.is_free === true,
-    }),
+      notaflof: row.notaflof === true,
+    }, title || ''),
     ticketUrl: safeWebUrl(row.ticket_url ?? row.source_url) ?? undefined,
     previewUrl: safeWebUrl(row.preview_url) ?? undefined,
     status: 'scheduled',
@@ -717,7 +794,7 @@ export function normalizeFeedShow(raw, fallbackMetro) {
     },
     acts,
     genres: cleanGenres(raw.genres),
-    price: cleanPrice(raw.price),
+    price: cleanPrice(raw.price, title || ''),
     ...(images.length ? { flyerImages: images } : {}),
     ...(typeof raw.flyerCredit === 'string' && raw.flyerCredit.trim() ? { flyerCredit: raw.flyerCredit.trim() } : {}),
     ticketUrl: safeWebUrl(raw.ticketUrl) ?? undefined,
@@ -825,7 +902,7 @@ export function mergeTwoShows(existing, incoming) {
     },
     acts,
     genres,
-    price: Object.keys(primary.price || {}).length ? primary.price : (secondary.price || {}),
+    price: mergePrices(primary.price, secondary.price),
     ticketUrl: primary.ticketUrl || secondary.ticketUrl,
     previewUrl: primary.previewUrl || secondary.previewUrl,
     flyerImages: primary.flyerImages?.length ? primary.flyerImages : secondary.flyerImages,
