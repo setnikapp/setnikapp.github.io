@@ -56,7 +56,7 @@ class GeminiClient:
         self,
         api_key: str | None = None,
         model: str | None = None,
-        timeout: float = 60.0,
+        timeout: float = 120.0,
         max_retries: int = 3,
         http_client: httpx.Client | None = None,
         sleep_fn: Any = time.sleep,

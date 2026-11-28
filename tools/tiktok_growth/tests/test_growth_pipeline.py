@@ -129,7 +129,7 @@ class TestGeminiClientAndSeedIngest(unittest.TestCase):
                 http_client=http_client,
             )
             self.assertEqual(len(added_again), 0)
-            self.assertIn("Skipped 3 duplicate", reply_again)
+            self.assertIn("Skipped 5 duplicate", reply_again)
 
 
 class TestBrandCheckAndVideoPayload(unittest.TestCase):

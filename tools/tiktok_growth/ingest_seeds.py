@@ -232,32 +232,37 @@ def ingest_from_comment(
 
         if downloaded:
             client = gemini_client or GeminiClient()
-            vision_res = client.generate_json_from_images(
-                prompt=VISION_PROMPT,
-                images=downloaded,
-                system_instruction=VISION_SYSTEM_INSTRUCTION,
-            )
-            raw_seeds = vision_res.get("seeds") if isinstance(vision_res, dict) else []
-            for item in raw_seeds or []:
-                if not isinstance(item, dict):
+            for idx, img_tuple in enumerate(downloaded, start=1):
+                try:
+                    vision_res = client.generate_json_from_images(
+                        prompt=VISION_PROMPT,
+                        images=[img_tuple],
+                        system_instruction=VISION_SYSTEM_INSTRUCTION,
+                    )
+                except Exception as exc:
+                    warnings.append(f"Gemini Vision failed on screenshot #{idx}: {exc}")
                     continue
-                query = str(item.get("query") or "").strip()
-                if len(query) < 3:
-                    continue
-                metro = str(item.get("metro") or "").strip().lower()
-                if metro not in {"nyc", "la", "both"}:
-                    metro = infer_metro_from_text(query)
-                category = str(item.get("category") or "search_gap").strip().lower()
-                signal = str(item.get("signal") or "Creator Search Insights screenshot").strip()
-                extracted.append(
-                    {
-                        "query": query,
-                        "metro": metro,
-                        "category": category,
-                        "signal": signal,
-                        "source": source_url or "github_issue_screenshot",
-                    }
-                )
+                raw_seeds = vision_res.get("seeds") if isinstance(vision_res, dict) else []
+                for item in raw_seeds or []:
+                    if not isinstance(item, dict):
+                        continue
+                    query = str(item.get("query") or "").strip()
+                    if len(query) < 3:
+                        continue
+                    metro = str(item.get("metro") or "").strip().lower()
+                    if metro not in {"nyc", "la", "both"}:
+                        metro = infer_metro_from_text(query)
+                    category = str(item.get("category") or "search_gap").strip().lower()
+                    signal = str(item.get("signal") or "Creator Search Insights screenshot").strip()
+                    extracted.append(
+                        {
+                            "query": query,
+                            "metro": metro,
+                            "category": category,
+                            "signal": signal,
+                            "source": source_url or "github_issue_screenshot",
+                        }
+                    )
 
     for line in manual_lines:
         extracted.append(
