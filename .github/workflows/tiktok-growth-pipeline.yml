@@ -100,7 +100,7 @@ jobs:
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           USE_MOCK: ${{ inputs.use_mock }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.8-flash' }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           INCLUDE_LISTINGS_FEED: ${{ vars.INCLUDE_LISTINGS_FEED || 'true' }}

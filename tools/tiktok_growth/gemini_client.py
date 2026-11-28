@@ -15,7 +15,7 @@ from typing import Any
 
 import httpx
 
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 

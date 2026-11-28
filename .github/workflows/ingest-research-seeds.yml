@@ -5,6 +5,13 @@ on:
     types: [opened]
   issue_comment:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Re-process the latest comment on this Seed Inbox issue number'
+        type: string
+        required: true
+        default: '12'
 
 permissions:
   contents: read
@@ -17,12 +24,15 @@ concurrency:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    # Only run on issues labeled `research-seed` and authored by repo owner/members/collaborators
+    # Only run on workflow_dispatch or issues labeled `research-seed` authored by repo owner/members/collaborators
     if: >-
-      contains(github.event.issue.labels.*.name, 'research-seed') &&
+      github.event_name == 'workflow_dispatch' ||
       (
-        (github.event_name == 'issues' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) ||
-        (github.event_name == 'issue_comment' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+        contains(github.event.issue.labels.*.name, 'research-seed') &&
+        (
+          (github.event_name == 'issues' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) ||
+          (github.event_name == 'issue_comment' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+        )
       )
     steps:
       - name: Checkout repository
@@ -39,20 +49,34 @@ jobs:
         run: python3 -m pip install --upgrade pip && python3 -m pip install "httpx>=0.27.0,<1.0.0"
 
       - name: Extract seeds via Gemini Vision
+        id: extract
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.8-flash' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
+          INPUT_ISSUE_NUMBER: ${{ inputs.issue_number }}
+          EVENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           SOURCE_URL: ${{ github.event.comment.html_url || github.event.issue.html_url }}
         run: |
-          if [ "${EVENT_NAME}" = "issue_comment" ]; then
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            ISSUE_NUMBER="${INPUT_ISSUE_NUMBER:-12}"
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments?per_page=100" \
+              --jq '.[-1].body // ""' > "${RUNNER_TEMP}/seed_body.md"
+            SOURCE_URL="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments?per_page=100" --jq '.[-1].html_url // ""')"
+          elif [ "${EVENT_NAME}" = "issue_comment" ]; then
+            ISSUE_NUMBER="${EVENT_ISSUE_NUMBER}"
             printf '%s' "${COMMENT_BODY}" > "${RUNNER_TEMP}/seed_body.md"
           else
+            ISSUE_NUMBER="${EVENT_ISSUE_NUMBER}"
             printf '%s' "${ISSUE_BODY}" > "${RUNNER_TEMP}/seed_body.md"
           fi
+
+          echo "issue_number=${ISSUE_NUMBER}" >> "$GITHUB_OUTPUT"
 
           python3 tools/tiktok_growth/ingest_seeds.py \
             --body-file "${RUNNER_TEMP}/seed_body.md" \
@@ -62,7 +86,7 @@ jobs:
       - name: Commit updated research_seeds.json to main
         env:
           PUSH_TOKEN: ${{ secrets.PAGES_REPO_PAT || secrets.GH_SECRETS_PAT }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_NUMBER: ${{ steps.extract.outputs.issue_number }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -88,7 +112,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_NUMBER: ${{ steps.extract.outputs.issue_number }}
         run: |
           if [ -s "${RUNNER_TEMP}/seed_reply.md" ]; then
             gh issue comment "${ISSUE_NUMBER}" \

@@ -16,7 +16,7 @@ Runs on **Monday (NYC)** and **Tuesday (LA)** at 19:00 UTC (2 PM EST / 3 PM EDT)
 ### 1. Add `GEMINI_API_KEY` Secret
 Open **Settings → Secrets and variables → Actions → Repository secrets** and add:
 - `GEMINI_API_KEY` — your Gemini API key (free tier works; uses ~3–5 calls per run).
-- *(Optional repository variable)* `GEMINI_MODEL` — defaults to `gemini-2.5-flash`.
+- *(Optional repository variable)* `GEMINI_MODEL` — defaults to `gemini-3.8-flash`.
 
 All existing Setnik secrets (`TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, `TIKTOK_REFRESH_TOKEN`, `PAGES_REPO_PAT`, `GH_SECRETS_PAT`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `LISTINGS_FEED_URL_TEMPLATE`) are reused automatically.
 
