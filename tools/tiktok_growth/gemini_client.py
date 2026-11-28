@@ -16,6 +16,11 @@ from typing import Any
 import httpx
 
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+DEFAULT_FALLBACK_MODELS: tuple[str, ...] = (
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+)
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
@@ -56,58 +61,77 @@ class GeminiClient:
         self,
         api_key: str | None = None,
         model: str | None = None,
-        timeout: float = 120.0,
-        max_retries: int = 3,
+        fallback_models: tuple[str, ...] | list[str] | None = None,
+        timeout: float = 90.0,
+        max_retries: int = 2,
         http_client: httpx.Client | None = None,
         sleep_fn: Any = time.sleep,
     ) -> None:
         self.api_key = (api_key if api_key is not None else os.environ.get("GEMINI_API_KEY", "")).strip()
         self.model = (model or os.environ.get("GEMINI_MODEL", "") or DEFAULT_GEMINI_MODEL).strip()
+        if fallback_models is not None:
+            raw_fb = [m.strip() for m in fallback_models if m and m.strip()]
+        else:
+            env_fb = os.environ.get("GEMINI_FALLBACK_MODELS", "").strip()
+            raw_fb = [m.strip() for m in env_fb.split(",") if m.strip()] if env_fb else list(DEFAULT_FALLBACK_MODELS)
+        self.fallback_models = [m for m in raw_fb if m != self.model]
         self.timeout = timeout
         self.max_retries = max_retries
         self._http_client = http_client
         self._sleep = sleep_fn
 
-    def _endpoint(self) -> str:
-        return f"{GEMINI_API_BASE}/{self.model}:generateContent"
+    def _endpoint(self, model_name: str | None = None) -> str:
+        target = model_name or self.model
+        return f"{GEMINI_API_BASE}/{target}:generateContent"
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.api_key:
             raise RuntimeError("GEMINI_API_KEY is not set")
 
-        url = self._endpoint()
         headers = {
             "Content-Type": "application/json",
             "x-goog-api-key": self.api_key,
         }
 
+        models_to_try = [self.model, *self.fallback_models]
         last_err: Exception | None = None
-        for attempt in range(self.max_retries):
-            try:
-                if self._http_client is not None:
-                    resp = self._http_client.post(url, json=payload, headers=headers)
-                else:
-                    with httpx.Client(timeout=self.timeout) as client:
-                        resp = client.post(url, json=payload, headers=headers)
 
-                if resp.status_code in RETRYABLE_STATUS_CODES and attempt < self.max_retries - 1:
-                    backoff = min(30.0, 2.0 ** (attempt + 1))
-                    self._sleep(backoff)
-                    continue
+        for model_name in models_to_try:
+            url = self._endpoint(model_name)
+            for attempt in range(self.max_retries):
+                try:
+                    if self._http_client is not None:
+                        resp = self._http_client.post(url, json=payload, headers=headers)
+                    else:
+                        with httpx.Client(timeout=self.timeout) as client:
+                            resp = client.post(url, json=payload, headers=headers)
 
-                if resp.status_code >= 400:
-                    raise RuntimeError(
-                        f"Gemini API HTTP {resp.status_code}: {resp.text[:500]}"
-                    )
-                return resp.json()
-            except httpx.HTTPError as exc:
-                last_err = exc
-                if attempt < self.max_retries - 1:
-                    self._sleep(min(30.0, 2.0 ** (attempt + 1)))
-                    continue
-                raise RuntimeError(f"Gemini API request failed: {exc}") from exc
+                    if resp.status_code == 404:
+                        last_err = RuntimeError(f"Gemini API HTTP 404 ({model_name}): {resp.text[:300]}")
+                        break
 
-        raise RuntimeError(f"Gemini API failed after retries: {last_err}")
+                    if resp.status_code in RETRYABLE_STATUS_CODES:
+                        last_err = RuntimeError(
+                            f"Gemini API HTTP {resp.status_code} ({model_name}): {resp.text[:300]}"
+                        )
+                        if attempt < self.max_retries - 1:
+                            self._sleep(min(15.0, 2.0 ** (attempt + 1)))
+                            continue
+                        break
+
+                    if resp.status_code >= 400:
+                        raise RuntimeError(
+                            f"Gemini API HTTP {resp.status_code} ({model_name}): {resp.text[:500]}"
+                        )
+                    return resp.json()
+                except httpx.HTTPError as exc:
+                    last_err = RuntimeError(f"Gemini API request failed ({model_name}): {exc}")
+                    if attempt < self.max_retries - 1:
+                        self._sleep(min(15.0, 2.0 ** (attempt + 1)))
+                        continue
+                    break
+
+        raise RuntimeError(str(last_err or "Gemini API failed across all models"))
 
     @staticmethod
     def _extract_text(response_json: dict[str, Any]) -> str:

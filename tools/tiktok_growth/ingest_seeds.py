@@ -158,7 +158,29 @@ def download_image(
     if not content or len(content) > MAX_IMAGE_BYTES:
         raise ValueError(f"Image size out of bounds ({len(content)} bytes): {url}")
     mime = _infer_mime_type(url, resp.headers.get("content-type"))
-    return content, mime
+    return optimize_screenshot_for_vision(content, mime)
+
+
+def optimize_screenshot_for_vision(
+    img_bytes: bytes,
+    mime_type: str,
+    max_dim: int = 1280,
+) -> tuple[bytes, str]:
+    """Downscale large phone screenshots to a compact JPEG (<=1280px) when Pillow is available."""
+    try:
+        from io import BytesIO
+        from PIL import Image
+
+        with Image.open(BytesIO(img_bytes)) as img:
+            w, h = img.size
+            if max(w, h) > max_dim or len(img_bytes) > 400_000:
+                img.thumbnail((max_dim, max_dim))
+                buf = BytesIO()
+                img.convert("RGB").save(buf, format="JPEG", quality=82, optimize=True)
+                return buf.getvalue(), "image/jpeg"
+    except Exception:
+        pass
+    return img_bytes, mime_type
 
 
 def normalize_query_key(query: str) -> str:

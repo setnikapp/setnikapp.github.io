@@ -45,8 +45,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install httpx
-        run: python3 -m pip install --upgrade pip && python3 -m pip install "httpx>=0.27.0,<1.0.0"
+      - name: Install httpx and Pillow
+        run: python3 -m pip install --upgrade pip && python3 -m pip install "httpx>=0.27.0,<1.0.0" "Pillow>=11.0.0,<13.0.0"
 
       - name: Extract seeds via Gemini Vision
         id: extract
@@ -66,8 +66,8 @@ jobs:
           if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
             ISSUE_NUMBER="${INPUT_ISSUE_NUMBER:-12}"
             gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments?per_page=100" \
-              --jq '.[-1].body // ""' > "${RUNNER_TEMP}/seed_body.md"
-            SOURCE_URL="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments?per_page=100" --jq '.[-1].html_url // ""')"
+              --jq 'map(select(.user.type != "Bot")) | .[-1].body // ""' > "${RUNNER_TEMP}/seed_body.md"
+            SOURCE_URL="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments?per_page=100" --jq 'map(select(.user.type != "Bot")) | .[-1].html_url // ""')"
           elif [ "${EVENT_NAME}" = "issue_comment" ]; then
             ISSUE_NUMBER="${EVENT_ISSUE_NUMBER}"
             printf '%s' "${COMMENT_BODY}" > "${RUNNER_TEMP}/seed_body.md"
