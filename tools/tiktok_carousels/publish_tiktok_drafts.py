@@ -31,11 +31,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BASE_URL = "https://setnikapp.github.io"
 TIKTOK_TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/"
 TIKTOK_CONTENT_INIT_URL = "https://open.tiktokapis.com/v2/post/publish/content/init/"
+TIKTOK_VIDEO_INBOX_INIT_URL = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
 
 MAX_DRAFTS_PER_RUN = 5
 MAX_SLIDE_WIDTH = 1080
 MAX_SLIDE_HEIGHT = 1920
 MAX_JPEG_BYTES = 20 * 1024 * 1024
+MAX_VIDEO_BYTES = 500 * 1024 * 1024
+SINGLE_CHUNK_MAX_BYTES = 64 * 1024 * 1024
+MULTI_CHUNK_BYTES = 10 * 1024 * 1024
 MAX_TITLE_UTF16 = 90
 MAX_DESC_UTF16 = 4000
 
@@ -330,18 +334,110 @@ def upload_photo_carousel_draft(
     return publish_id
 
 
+def validate_local_mp4(path: Path) -> int:
+    """Validate that a local file is a non-empty MP4 under MAX_VIDEO_BYTES and return its byte size."""
+    if not path.is_file():
+        raise FileNotFoundError(f"Missing video MP4: {path}")
+    if path.suffix.lower() != ".mp4":
+        raise ValueError(f"Video {path} must have .mp4 extension")
+    size = path.stat().st_size
+    if size <= 0 or size >= MAX_VIDEO_BYTES:
+        raise ValueError(f"Video {path} size {size} bytes is out of bounds")
+    return size
+
+
+def build_video_inbox_upload_payload(video_size: int) -> dict[str, Any]:
+    """Build TikTok /v2/post/publish/inbox/video/init/ FILE_UPLOAD payload."""
+    if video_size <= 0 or video_size >= MAX_VIDEO_BYTES:
+        raise ValueError(f"Invalid video_size: {video_size}")
+    if video_size <= SINGLE_CHUNK_MAX_BYTES:
+        chunk_size = video_size
+        total_chunks = 1
+    else:
+        chunk_size = MULTI_CHUNK_BYTES
+        total_chunks = (video_size + chunk_size - 1) // chunk_size
+    return {
+        "source_info": {
+            "source": "FILE_UPLOAD",
+            "video_size": video_size,
+            "chunk_size": chunk_size,
+            "total_chunk_count": total_chunks,
+        }
+    }
+
+
+def upload_video_draft(
+    access_token: str,
+    mp4_path: Path,
+    http_client: httpx.Client | None = None,
+) -> str:
+    """Upload an MP4 draft directly to TikTok Creator Inbox via FILE_UPLOAD (same video.upload scope)."""
+    video_size = validate_local_mp4(mp4_path)
+    init_payload = build_video_inbox_upload_payload(video_size)
+    chunk_size = int(init_payload["source_info"]["chunk_size"])
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json; charset=UTF-8",
+    }
+
+    own_client = http_client is None
+    client = http_client or httpx.Client(timeout=120.0)
+    try:
+        resp = client.post(TIKTOK_VIDEO_INBOX_INIT_URL, json=init_payload, headers=headers)
+        body: dict[str, Any] = resp.json()
+        err = body.get("error") or {}
+        err_code = str(err.get("code") or "ok")
+        err_msg = str(err.get("message") or "")
+        if resp.status_code >= 400 or err_code != "ok":
+            raise RuntimeError(
+                f"TikTok video draft init failed: {diagnose_tiktok_error(err_code, err_msg)}"
+            )
+
+        data = body.get("data") or {}
+        publish_id = str(data.get("publish_id") or "").strip()
+        upload_url = str(data.get("upload_url") or "").strip()
+        if not publish_id or not upload_url:
+            raise RuntimeError("TikTok video draft init returned ok without publish_id or upload_url")
+
+        with mp4_path.open("rb") as fh:
+            offset = 0
+            while offset < video_size:
+                chunk = fh.read(chunk_size)
+                if not chunk:
+                    break
+                end = offset + len(chunk) - 1
+                put_headers = {
+                    "Content-Type": "video/mp4",
+                    "Content-Length": str(len(chunk)),
+                    "Content-Range": f"bytes {offset}-{end}/{video_size}",
+                }
+                put_resp = client.put(upload_url, content=chunk, headers=put_headers)
+                if put_resp.status_code not in {200, 201, 206}:
+                    raise RuntimeError(
+                        f"TikTok video chunk PUT failed (HTTP {put_resp.status_code}): {put_resp.text[:300]}"
+                    )
+                offset += len(chunk)
+        return publish_id
+    finally:
+        if own_client:
+            client.close()
+
+
 def build_job_summary_markdown(
     manifest: dict[str, Any],
     pages_folder: str,
     results: list[dict[str, Any]],
     dry_run: bool,
     token_rotated: bool,
+    video_results: list[dict[str, Any]] | None = None,
 ) -> str:
     """Generate rich Markdown for $GITHUB_STEP_SUMMARY with inline preview images & sound queries."""
     run_date = manifest.get("run_date", "")
     batch = manifest.get("batch", "nyc_genres")
     weekend_range = manifest.get("weekend_range", "")
     mode_badge = "DRY RUN" if dry_run else "LIVE DRAFT UPLOAD"
+    vids = list(video_results or [])
 
     lines: list[str] = [
         f"## Setnik Weekly TikTok Carousels — {run_date} · `{batch}` ({mode_badge})",
@@ -350,11 +446,17 @@ def build_job_summary_markdown(
         f"- **Weekend:** {weekend_range}",
         f"- **Pages folder:** `static/carousels/{pages_folder}/`",
         f"- **Carousels processed:** {len(results)}",
-        f"- **Refresh token rotated:** {'Yes' if token_rotated else 'No'}",
-        "",
-        "| Post | Slides | Headliner Song to Pick in TikTok | Status / Publish ID |",
-        "| --- | ---: | --- | --- |",
     ]
+    if vids:
+        lines.append(f"- **Videos processed:** {len(vids)}")
+    lines.extend(
+        [
+            f"- **Refresh token rotated:** {'Yes' if token_rotated else 'No'}",
+            "",
+            "| Post | Format / Slides | Headliner Song to Pick in TikTok | Status / Publish ID |",
+            "| --- | ---: | --- | --- |",
+        ]
+    )
     for item in results:
         sound = item.get("headliner_sound_query") or "—"
         status = item.get("status_label") or "—"
@@ -362,6 +464,14 @@ def build_job_summary_markdown(
         fan_note = f" ({int(fans):,} Deezer fans)" if isinstance(fans, int) and fans > 0 else ""
         lines.append(
             f"| **{item['display_name']}** (`{item['slug']}`){fan_note} | {len(item['slide_urls'])} | `{sound}` | {status} |"
+        )
+    for vid in vids:
+        sound = vid.get("headliner_sound_query") or "—"
+        status = vid.get("status_label") or "—"
+        dur = vid.get("duration_sec", "")
+        meta = f"Video ({dur}s, {vid.get('audio_mode', 'music_only')})"
+        lines.append(
+            f"| **{vid['display_name']}** (`{vid['slug']}`) | {meta} | `{sound}` | {status} |"
         )
 
     lines.append("")
@@ -372,12 +482,18 @@ def build_job_summary_markdown(
             if isinstance(fans, int) and fans > 0
             else []
         )
+        signal_line = (
+            [f"- **Research Signal:** {item['source_signal']}"]
+            if item.get("source_signal")
+            else []
+        )
         lines.extend(
             [
                 f"### {item['display_name']} — `{item['title']}`",
                 "",
                 f"- **TikTok Sound Search:** `{item.get('headliner_sound_query') or '—'}`",
                 *fan_line,
+                *signal_line,
                 f"- **Status:** {item.get('status_label')}",
                 "",
                 "<details><summary>Caption & Hashtags</summary>",
@@ -394,6 +510,35 @@ def build_job_summary_markdown(
             lines.append(f"![{item['display_name']} Slide {idx}]({url})")
         lines.append("")
 
+    for vid in vids:
+        signal_line = (
+            [f"- **Research Signal:** {vid['source_signal']}"]
+            if vid.get("source_signal")
+            else []
+        )
+        lines.extend(
+            [
+                f"### {vid['display_name']} — `{vid['title']}`",
+                "",
+                f"- **Audio Mode:** `{vid.get('audio_mode', 'music_only')}` · **Visual Mode:** `{vid.get('visual_mode', 'motion_cards')}` · **Duration:** {vid.get('duration_sec', '—')}s",
+                f"- **TikTok Sound Search:** `{vid.get('headliner_sound_query') or '—'}`",
+                *signal_line,
+                f"- **Status:** {vid.get('status_label')}",
+                "",
+                "<details><summary>Caption & Hashtags (copy into TikTok Inbox draft)</summary>",
+                "",
+                "```text",
+                str(vid.get("description", "")),
+                "```",
+                "",
+                "</details>",
+                "",
+            ]
+        )
+        if vid.get("cover_url"):
+            lines.append(f"![{vid['display_name']} Cover]({vid['cover_url']})")
+            lines.append("")
+
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -408,10 +553,12 @@ def publish_pipeline(
     skip_url_poll: bool = False,
     http_client: httpx.Client | None = None,
 ) -> Path:
-    """Validate JPEGs, poll live URLs, upload drafts (unless dry-run), and write job_summary.md."""
+    """Validate JPEGs & MP4s, poll live URLs, upload drafts (unless dry-run), and write job_summary.md."""
     manifest_path = ready_dir / "manifest.json"
     manifest: dict[str, Any] = json.loads(manifest_path.read_text(encoding="utf-8"))
     carousels: list[dict[str, Any]] = list(manifest.get("carousels") or [])[:MAX_DRAFTS_PER_RUN]
+    remaining_quota = max(0, MAX_DRAFTS_PER_RUN - len(carousels))
+    videos: list[dict[str, Any]] = list(manifest.get("videos") or [])[:remaining_quota]
 
     # 1. Validate local JPEGs and build slide URLs + strict MEDIA_UPLOAD payloads
     prepared: list[dict[str, Any]] = []
@@ -440,13 +587,42 @@ def publish_pipeline(
                 "title": payload["post_info"]["title"],
                 "description": payload["post_info"]["description"],
                 "headliner_sound_query": str(carousel.get("headliner_sound_query") or ""),
+                "source_signal": str(carousel.get("source_signal") or ""),
                 "deezer_fans": carousel.get("deezer_fans"),
                 "slide_urls": slide_urls,
                 "payload": payload,
             }
         )
 
-    # 2. Live URL readiness poll
+    # 1b. Validate local MP4s for short-form video drafts (FILE_UPLOAD)
+    prepared_videos: list[dict[str, Any]] = []
+    for video in videos:
+        slug = str(video["slug"])
+        video_file = str(video.get("video_file") or "video.mp4")
+        local_mp4 = ready_dir / slug / video_file
+        size_bytes = validate_local_mp4(local_mp4)
+        cover_file = str(video.get("cover_file") or "")
+        cover_url = ""
+        if cover_file and (ready_dir / slug / cover_file).is_file():
+            cover_url = build_carousel_slide_url(pages_folder, slug, cover_file, base_url=base_url)
+        prepared_videos.append(
+            {
+                "slug": slug,
+                "display_name": str(video.get("display_name") or slug.title()),
+                "title": str(video.get("title") or ""),
+                "description": str(video.get("description") or ""),
+                "headliner_sound_query": str(video.get("headliner_sound_query") or ""),
+                "source_signal": str(video.get("source_signal") or ""),
+                "audio_mode": str(video.get("audio_mode") or "music_only"),
+                "visual_mode": str(video.get("visual_mode") or "motion_cards"),
+                "duration_sec": video.get("duration_sec", ""),
+                "mp4_path": local_mp4,
+                "size_bytes": size_bytes,
+                "cover_url": cover_url,
+            }
+        )
+
+    # 2. Live URL readiness poll (for photo carousel slides)
     if all_urls and not skip_url_poll:
         poll_urls_ready(
             all_urls,
@@ -469,7 +645,7 @@ def publish_pipeline(
 
     access_token: str | None = None
     token_rotated = False
-    if not effective_dry_run and prepared:
+    if not effective_dry_run and (prepared or prepared_videos):
         access_token, new_refresh = refresh_access_token(
             client_key=client_key,
             client_secret=client_secret,
@@ -479,8 +655,9 @@ def publish_pipeline(
         )
         token_rotated = bool(new_refresh)
 
-    # 4. Upload up to 5 photo carousel drafts (or record dry-run status)
+    # 4. Upload up to 5 drafts total (carousels + videos) or record dry-run status
     results: list[dict[str, Any]] = []
+    video_results: list[dict[str, Any]] = []
     errors: list[str] = []
     for item in prepared:
         entry = dict(item)
@@ -503,6 +680,27 @@ def publish_pipeline(
                 errors.append(f"{item['slug']}: {exc}")
         results.append(entry)
 
+    for vid in prepared_videos:
+        entry = dict(vid)
+        if effective_dry_run:
+            entry["publish_id"] = None
+            entry["status_label"] = f"Dry run (MP4 validated, {vid['size_bytes']:,} bytes)"
+        else:
+            assert access_token is not None
+            try:
+                publish_id = upload_video_draft(
+                    access_token=access_token,
+                    mp4_path=vid["mp4_path"],
+                    http_client=http_client,
+                )
+                entry["publish_id"] = publish_id
+                entry["status_label"] = f"Uploaded Video (`{publish_id}`)"
+            except Exception as exc:
+                entry["publish_id"] = None
+                entry["status_label"] = f"Failed: {exc}"
+                errors.append(f"{vid['slug']}: {exc}")
+        video_results.append(entry)
+
     # 5. Emit job_summary.md
     summary_md = build_job_summary_markdown(
         manifest=manifest,
@@ -510,6 +708,7 @@ def publish_pipeline(
         results=results,
         dry_run=effective_dry_run,
         token_rotated=token_rotated,
+        video_results=video_results,
     )
     summary_path = ready_dir / "job_summary.md"
     summary_path.write_text(summary_md, encoding="utf-8")

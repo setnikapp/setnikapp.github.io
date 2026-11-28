@@ -1,0 +1,204 @@
+name: TikTok Growth Pipeline (NYC & LA)
+
+on:
+  schedule:
+    # Mondays 19:00 UTC (2:00 PM EST / 3:00 PM EDT): NYC growth carousels + short-form video
+    - cron: '0 19 * * 1'
+    # Tuesdays 19:00 UTC (2:00 PM EST / 3:00 PM EDT): LA growth carousels + short-form video
+    - cron: '0 19 * * 2'
+  workflow_dispatch:
+    inputs:
+      metro:
+        description: 'Target metro (nyc or la)'
+        type: choice
+        required: true
+        default: 'nyc'
+        options:
+          - nyc
+          - la
+      dry_run:
+        description: 'Research, generate, render, and preview without uploading to TikTok or consuming seeds'
+        type: boolean
+        required: false
+        default: false
+      use_mock:
+        description: 'Use offline mock show data and offline briefs/scripts (no Supabase or Gemini calls)'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: 'tiktok-growth-pipeline'
+  cancel-in-progress: false
+
+jobs:
+  growth:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Compute run date, metro, and Pages folder
+        id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+          INPUT_METRO: ${{ inputs.metro }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          RUN_DATE="$(TZ=America/New_York date +%Y-%m-%d)"
+          if [ "${EVENT_NAME}" = "schedule" ]; then
+            case "${EVENT_SCHEDULE}" in
+              "0 19 * * 2") METRO="la" ;;
+              *) METRO="nyc" ;;
+            esac
+          else
+            METRO="${INPUT_METRO:-nyc}"
+          fi
+
+          if [ "${INPUT_DRY_RUN}" = "true" ]; then
+            PAGES_FOLDER="dry-run-${RUN_DATE}"
+          else
+            PAGES_FOLDER="${RUN_DATE}"
+          fi
+
+          echo "run_date=${RUN_DATE}" >> "$GITHUB_OUTPUT"
+          echo "metro=${METRO}" >> "$GITHUB_OUTPUT"
+          echo "pages_folder=${PAGES_FOLDER}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install FFmpeg, Python dependencies, and ensure Chromium is available
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg
+          fi
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r tools/tiktok_growth/requirements.txt
+          if ! command -v google-chrome >/dev/null 2>&1 && ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
+            python3 -m playwright install chromium
+          fi
+
+      - name: Run Research, Content, Carousel & Video Renderers
+        env:
+          RUN_DATE: ${{ steps.meta.outputs.run_date }}
+          METRO: ${{ steps.meta.outputs.metro }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          USE_MOCK: ${{ inputs.use_mock }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          INCLUDE_LISTINGS_FEED: ${{ vars.INCLUDE_LISTINGS_FEED || 'true' }}
+          LISTINGS_FEED_URL_TEMPLATE: ${{ secrets.LISTINGS_FEED_URL_TEMPLATE || vars.LISTINGS_FEED_URL_TEMPLATE }}
+        run: |
+          ARGS=(
+            "--metro" "${METRO}"
+            "--date" "${RUN_DATE}"
+            "--ready-dir" "build/growth_ready/${RUN_DATE}"
+          )
+          if [ "${USE_MOCK}" = "true" ]; then
+            ARGS+=("--mock")
+          fi
+          if [ "${INPUT_DRY_RUN}" = "true" ]; then
+            ARGS+=("--dry-run")
+          fi
+          python3 tools/tiktok_growth/run_growth_pipeline.py "${ARGS[@]}"
+
+      - name: Sync carousel JPEGs and growth state to main
+        env:
+          RUN_DATE: ${{ steps.meta.outputs.run_date }}
+          METRO: ${{ steps.meta.outputs.metro }}
+          PAGES_FOLDER: ${{ steps.meta.outputs.pages_folder }}
+          PUSH_TOKEN: ${{ secrets.PAGES_REPO_PAT || secrets.GH_SECRETS_PAT }}
+        run: |
+          python3 tools/tiktok_carousels/sync_pages_repo.py \
+            --date "${RUN_DATE}" \
+            --ready-dir "build/growth_ready/${RUN_DATE}" \
+            --pages-folder "${PAGES_FOLDER}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add static/carousels tools/tiktok_growth/content_log.json tools/tiktok_growth/research_seeds.json
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit; skipping push."
+            exit 0
+          fi
+
+          if [ -z "${PUSH_TOKEN}" ]; then
+            echo "::error::Neither PAGES_REPO_PAT nor GH_SECRETS_PAT is set; cannot push to main."
+            exit 1
+          fi
+
+          git commit -m "chore(growth): publish ${PAGES_FOLDER} (${METRO}) carousels & log"
+          AUTH_HEADER="$(printf 'x-access-token:%s' "${PUSH_TOKEN}" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${AUTH_HEADER}" \
+            push origin HEAD:main
+
+      - name: Poll live Pages URLs and upload TikTok Inbox drafts (Carousels + Video)
+        env:
+          RUN_DATE: ${{ steps.meta.outputs.run_date }}
+          PAGES_FOLDER: ${{ steps.meta.outputs.pages_folder }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          TIKTOK_CLIENT_KEY: ${{ secrets.TIKTOK_CLIENT_KEY }}
+          TIKTOK_CLIENT_SECRET: ${{ secrets.TIKTOK_CLIENT_SECRET }}
+          TIKTOK_REFRESH_TOKEN: ${{ secrets.TIKTOK_REFRESH_TOKEN }}
+          TIKTOK_NEW_REFRESH_TOKEN_FILE: ${{ runner.temp }}/tiktok_new_refresh_token.txt
+        run: |
+          ARGS=(
+            "--date" "${RUN_DATE}"
+            "--ready-dir" "build/growth_ready/${RUN_DATE}"
+            "--pages-folder" "${PAGES_FOLDER}"
+            "--token-out" "${TIKTOK_NEW_REFRESH_TOKEN_FILE}"
+          )
+          if [ "${INPUT_DRY_RUN}" = "true" ] || [ -z "${TIKTOK_CLIENT_KEY}" ] || [ -z "${TIKTOK_CLIENT_SECRET}" ] || [ -z "${TIKTOK_REFRESH_TOKEN}" ]; then
+            ARGS+=("--dry-run")
+          fi
+          python3 tools/tiktok_carousels/publish_tiktok_drafts.py "${ARGS[@]}"
+
+      - name: Rotate TIKTOK_REFRESH_TOKEN secret if refreshed
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_SECRETS_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TIKTOK_NEW_REFRESH_TOKEN_FILE: ${{ runner.temp }}/tiktok_new_refresh_token.txt
+        run: |
+          if [ ! -s "${TIKTOK_NEW_REFRESH_TOKEN_FILE}" ]; then
+            echo "No rotated refresh token to persist."
+            exit 0
+          fi
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::warning::TIKTOK_REFRESH_TOKEN rotated but GH_SECRETS_PAT is not set; cannot update repository secret."
+            rm -f "${TIKTOK_NEW_REFRESH_TOKEN_FILE}"
+            exit 0
+          fi
+          gh secret set TIKTOK_REFRESH_TOKEN --repo "${GITHUB_REPOSITORY}" < "${TIKTOK_NEW_REFRESH_TOKEN_FILE}"
+          rm -f "${TIKTOK_NEW_REFRESH_TOKEN_FILE}"
+          echo "Updated TIKTOK_REFRESH_TOKEN repository secret."
+
+      - name: Publish growth preview to Job Summary
+        if: always()
+        env:
+          RUN_DATE: ${{ steps.meta.outputs.run_date }}
+        run: |
+          SUMMARY_FILE="build/growth_ready/${RUN_DATE}/job_summary.md"
+          if [ -f "${SUMMARY_FILE}" ]; then
+            cat "${SUMMARY_FILE}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No job_summary.md was generated for ${RUN_DATE}." >> "$GITHUB_STEP_SUMMARY"
+          fi
