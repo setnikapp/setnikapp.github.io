@@ -16,11 +16,6 @@ from typing import Any
 import httpx
 
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
-DEFAULT_FALLBACK_MODELS: tuple[str, ...] = (
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-)
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
@@ -63,7 +58,7 @@ class GeminiClient:
         model: str | None = None,
         fallback_models: tuple[str, ...] | list[str] | None = None,
         timeout: float = 90.0,
-        max_retries: int = 2,
+        max_retries: int = 3,
         http_client: httpx.Client | None = None,
         sleep_fn: Any = time.sleep,
     ) -> None:
@@ -73,8 +68,9 @@ class GeminiClient:
             raw_fb = [m.strip() for m in fallback_models if m and m.strip()]
         else:
             env_fb = os.environ.get("GEMINI_FALLBACK_MODELS", "").strip()
-            raw_fb = [m.strip() for m in env_fb.split(",") if m.strip()] if env_fb else list(DEFAULT_FALLBACK_MODELS)
+            raw_fb = [m.strip() for m in env_fb.split(",") if m.strip()] if env_fb else []
         self.fallback_models = [m for m in raw_fb if m != self.model]
+        self._discovered_fallbacks: list[str] | None = None
         self.timeout = timeout
         self.max_retries = max_retries
         self._http_client = http_client
@@ -83,6 +79,37 @@ class GeminiClient:
     def _endpoint(self, model_name: str | None = None) -> str:
         target = model_name or self.model
         return f"{GEMINI_API_BASE}/{target}:generateContent"
+
+    def _discover_flash_fallbacks(self) -> list[str]:
+        """Query /v1beta/models once to find active alternative Flash models if primary hits 503."""
+        if self._discovered_fallbacks is not None:
+            return self._discovered_fallbacks
+        if self._http_client is not None:
+            self._discovered_fallbacks = []
+            return []
+        found: list[str] = []
+        try:
+            headers = {"x-goog-api-key": self.api_key}
+            with httpx.Client(timeout=15.0) as client:
+                resp = client.get(GEMINI_API_BASE, headers=headers)
+            if resp.status_code == 200:
+                for m in (resp.json().get("models") or []):
+                    name = str(m.get("name") or "").removeprefix("models/")
+                    methods = m.get("supportedGenerationMethods") or []
+                    if (
+                        "generateContent" in methods
+                        and "flash" in name.lower()
+                        and "tts" not in name.lower()
+                        and "image" not in name.lower()
+                        and name != self.model
+                    ):
+                        found.append(name)
+        except Exception:
+            pass
+        # Prefer newer/lite flash variants first, cap at 3 fallbacks
+        found.sort(reverse=True)
+        self._discovered_fallbacks = found[:3]
+        return self._discovered_fallbacks
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.api_key:
@@ -93,11 +120,18 @@ class GeminiClient:
             "x-goog-api-key": self.api_key,
         }
 
-        models_to_try = [self.model, *self.fallback_models]
+        tried: set[str] = set()
+        queue: list[str] = [self.model, *self.fallback_models]
+        discovered = False
         last_err: Exception | None = None
 
-        for model_name in models_to_try:
+        while queue:
+            model_name = queue.pop(0)
+            if model_name in tried:
+                continue
+            tried.add(model_name)
             url = self._endpoint(model_name)
+
             for attempt in range(self.max_retries):
                 try:
                     if self._http_client is not None:
@@ -115,7 +149,7 @@ class GeminiClient:
                             f"Gemini API HTTP {resp.status_code} ({model_name}): {resp.text[:300]}"
                         )
                         if attempt < self.max_retries - 1:
-                            self._sleep(min(15.0, 2.0 ** (attempt + 1)))
+                            self._sleep(min(15.0, 3.0 * (attempt + 1)))
                             continue
                         break
 
@@ -127,9 +161,13 @@ class GeminiClient:
                 except httpx.HTTPError as exc:
                     last_err = RuntimeError(f"Gemini API request failed ({model_name}): {exc}")
                     if attempt < self.max_retries - 1:
-                        self._sleep(min(15.0, 2.0 ** (attempt + 1)))
+                        self._sleep(min(15.0, 3.0 * (attempt + 1)))
                         continue
                     break
+
+            if not queue and not discovered:
+                discovered = True
+                queue.extend(m for m in self._discover_flash_fallbacks() if m not in tried)
 
         raise RuntimeError(str(last_err or "Gemini API failed across all models"))
 
