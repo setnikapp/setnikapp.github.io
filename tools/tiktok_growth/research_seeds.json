@@ -1,3 +1,244 @@
 {
-  "seeds": []
+  "seeds": [
+    {
+      "id": "seed-fa0934f591",
+      "query": "concertbts",
+      "metro": "both",
+      "category": "trending_search",
+      "signal": "+1,000% search growth",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-b5b5ca7e9b",
+      "query": "ConcertBand",
+      "metro": "both",
+      "category": "trending_search",
+      "signal": "+174.6% search growth",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-e7a3fcdc87",
+      "query": "ConcertHall",
+      "metro": "both",
+      "category": "trending_search",
+      "signal": "+43.3% search growth",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-9d32493b4d",
+      "query": "post concert",
+      "metro": "both",
+      "category": "general",
+      "signal": "115K search volume",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-45dcf9b2c0",
+      "query": "ConcertReady",
+      "metro": "both",
+      "category": "trending_search",
+      "signal": "+1,000% search growth",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-307ff7a51c",
+      "query": "What to bring to a big concert",
+      "metro": "both",
+      "category": "trending_search",
+      "signal": "+86.3% search growth",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-f1303b6430",
+      "query": "concertblack",
+      "metro": "both",
+      "category": "general",
+      "signal": "243K search volume",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-fed8302eae",
+      "query": "couple at concert",
+      "metro": "both",
+      "category": "trending_search",
+      "signal": "+88.3% search growth",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-c3866b47f5",
+      "query": "sm6 concert",
+      "metro": "both",
+      "category": "general",
+      "signal": "44.1K search volume",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-0d9f3c519b",
+      "query": "concert manners",
+      "metro": "both",
+      "category": "trending_search",
+      "signal": "+112.4% search growth",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-04b8de54a4",
+      "query": "concert bed",
+      "metro": "both",
+      "category": "trending_search",
+      "signal": "+1,000% search growth",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-5648cb3b1a",
+      "query": "concert trends idea",
+      "metro": "both",
+      "category": "general",
+      "signal": "High search volume",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-c00f8f5e45",
+      "query": "raves",
+      "metro": "both",
+      "category": "general",
+      "signal": "229K search volume",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-95c149c8f9",
+      "query": "what is rave",
+      "metro": "both",
+      "category": "general",
+      "signal": "243K search volume",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-fdb67a7c57",
+      "query": "raving",
+      "metro": "both",
+      "category": "general",
+      "signal": "229K search volume",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-7f7e6fa366",
+      "query": "shaq at a rave",
+      "metro": "both",
+      "category": "trending_search",
+      "signal": "+118.1% search growth",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-be81c7a113",
+      "query": "rave muzzing",
+      "metro": "both",
+      "category": "trending_search",
+      "signal": "+78.9% search growth",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-7a962871cf",
+      "query": "Shia rave",
+      "metro": "both",
+      "category": "trending_search",
+      "signal": "+68.5% search growth",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-50691ca0da",
+      "query": "ravelife",
+      "metro": "both",
+      "category": "trending_search",
+      "signal": "+1,000%+ search growth",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-745292f4eb",
+      "query": "going to a rave",
+      "metro": "both",
+      "category": "general",
+      "signal": "108K search volume",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-572094b236",
+      "query": "Edm club",
+      "metro": "both",
+      "category": "trending_search",
+      "signal": "+1,000% search growth",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-9d608e9303",
+      "query": "shuffling edm",
+      "metro": "both",
+      "category": "general",
+      "signal": "226K search volume",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-3108d21c4a",
+      "query": "EdmLifestyle",
+      "metro": "both",
+      "category": "general",
+      "signal": "182K search volume",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    },
+    {
+      "id": "seed-6327640484",
+      "query": "Best edc",
+      "metro": "both",
+      "category": "general",
+      "signal": "89.8K search volume",
+      "source": "https://github.com/setnikapp/setnikapp.github.io/issues/12#issuecomment-7242536583",
+      "added_at": "2026-11-28T17:14:44+00:00",
+      "consumed_at": null
+    }
+  ]
 }
