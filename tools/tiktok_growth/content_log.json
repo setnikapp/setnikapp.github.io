@@ -1,3 +1,37 @@
 {
-  "entries": []
+  "entries": [
+    {
+      "date": "2026-11-28",
+      "metro": "nyc",
+      "slug": "nyc-underground-show-scout",
+      "format": "carousel",
+      "template": "search_listicle",
+      "topic": "NYC Underground Music Picks for Nov 28",
+      "hook": "Stop doom-scrolling for plans. These 3 NYC shows are actually worth your Saturday.",
+      "source_signal": "Google search trend: 'live music nyc this weekend'",
+      "audio_mode": "music_only"
+    },
+    {
+      "date": "2026-11-28",
+      "metro": "nyc",
+      "slug": "nyc-concert-ready-aesthetic",
+      "format": "carousel",
+      "template": "scene_hot_take",
+      "topic": "The 'Concert Ready' Look for NYC Venues",
+      "hook": "Concert ready in NYC? Don't look like a tourist. Here's what to wear where.",
+      "source_signal": "Creator Search Insights: 'ConcertReady'",
+      "audio_mode": "music_only"
+    },
+    {
+      "date": "2026-11-28",
+      "metro": "nyc",
+      "slug": "nyc-gig-bts-swipe",
+      "format": "video",
+      "template": "short_explainer",
+      "topic": "How to find NYC shows without the Ticketmaster headache",
+      "hook": "Tired of Ticketmaster? This is how real NYC music fans find shows.",
+      "source_signal": "Creator Search Insights: 'concertbts'",
+      "audio_mode": "voiceover"
+    }
+  ]
 }
