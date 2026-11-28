@@ -6,6 +6,10 @@ on:
     - cron: '0 19 * * 1'
     # Tuesdays 19:00 UTC (2:00 PM EST / 3:00 PM EDT): LA growth carousels + short-form video
     - cron: '0 19 * * 2'
+    # Saturdays 19:00 UTC (2:00 PM EST / 3:00 PM EDT): NYC weekend growth carousels + short-form video
+    - cron: '0 19 * * 6'
+    # Sundays 19:00 UTC (2:00 PM EST / 3:00 PM EDT): LA weekend growth carousels + short-form video
+    - cron: '0 19 * * 0'
   workflow_dispatch:
     inputs:
       metro:
@@ -54,7 +58,7 @@ jobs:
           RUN_DATE="$(TZ=America/New_York date +%Y-%m-%d)"
           if [ "${EVENT_NAME}" = "schedule" ]; then
             case "${EVENT_SCHEDULE}" in
-              "0 19 * * 2") METRO="la" ;;
+              "0 19 * * 2"|"0 19 * * 0") METRO="la" ;;
               *) METRO="nyc" ;;
             esac
           else

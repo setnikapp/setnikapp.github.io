@@ -2,12 +2,14 @@
 
 Zero-cost, automated **Research → Content (Carousels + Short-Form Video) → Publish** pipeline powered by the Gemini free-tier API, Playwright, FFmpeg, and TikTok's Content Posting API (`video.upload`).
 
-Runs on **Monday (NYC)** and **Tuesday (LA)** at 19:00 UTC (2 PM EST / 3 PM EDT)—leaving Wed / Thu / Fri free for the existing show roundup & spotlight batches.
+Runs on **Monday & Saturday (NYC)** and **Tuesday & Sunday (LA)** at 19:00 UTC (2 PM EST / 3 PM EDT)—leaving Wed / Thu / Fri free for the existing show roundup & spotlight batches.
 
 | Day | Market | Output per Run |
 | --- | --- | --- |
 | **Monday** (`0 19 * * 1`) | **NYC** | 2 researched editorial carousels + 1 short-form MP4 video (**3 drafts**) |
 | **Tuesday** (`0 19 * * 2`) | **LA** | 2 researched editorial carousels + 1 short-form MP4 video (**3 drafts**) |
+| **Saturday** (`0 19 * * 6`) | **NYC** | 2 researched editorial carousels + 1 short-form MP4 video (**3 drafts**) |
+| **Sunday** (`0 19 * * 0`) | **LA** | 2 researched editorial carousels + 1 short-form MP4 video (**3 drafts**) |
 
 ---
 
