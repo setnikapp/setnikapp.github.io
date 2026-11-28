@@ -16,8 +16,15 @@ from typing import Any
 import httpx
 
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+DEFAULT_FALLBACK_MODELS: tuple[str, ...] = (
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3.1-flash-lite",
+    "gemini-3.6-flash",
+    "gemini-3-flash-preview",
+)
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+EXCLUDED_FALLBACK_SUBSTRINGS = ("omni", "live", "tts", "image", "robotics", "transcribe")
 
 
 def strip_json_fences(raw_text: str) -> str:
@@ -58,7 +65,7 @@ class GeminiClient:
         model: str | None = None,
         fallback_models: tuple[str, ...] | list[str] | None = None,
         timeout: float = 90.0,
-        max_retries: int = 3,
+        max_retries: int = 2,
         http_client: httpx.Client | None = None,
         sleep_fn: Any = time.sleep,
     ) -> None:
@@ -68,7 +75,11 @@ class GeminiClient:
             raw_fb = [m.strip() for m in fallback_models if m and m.strip()]
         else:
             env_fb = os.environ.get("GEMINI_FALLBACK_MODELS", "").strip()
-            raw_fb = [m.strip() for m in env_fb.split(",") if m.strip()] if env_fb else []
+            raw_fb = (
+                [m.strip() for m in env_fb.split(",") if m.strip()]
+                if env_fb
+                else list(DEFAULT_FALLBACK_MODELS)
+            )
         self.fallback_models = [m for m in raw_fb if m != self.model]
         self._discovered_fallbacks: list[str] | None = None
         self.timeout = timeout
@@ -81,7 +92,7 @@ class GeminiClient:
         return f"{GEMINI_API_BASE}/{target}:generateContent"
 
     def _discover_flash_fallbacks(self) -> list[str]:
-        """Query /v1beta/models once to find active alternative Flash models if primary hits 503."""
+        """Query /v1beta/models once to find active Gemini 3.x Flash models if primary hits 503."""
         if self._discovered_fallbacks is not None:
             return self._discovered_fallbacks
         if self._http_client is not None:
@@ -95,20 +106,21 @@ class GeminiClient:
             if resp.status_code == 200:
                 for m in (resp.json().get("models") or []):
                     name = str(m.get("name") or "").removeprefix("models/")
+                    low = name.lower()
                     methods = m.get("supportedGenerationMethods") or []
                     if (
                         "generateContent" in methods
-                        and "flash" in name.lower()
-                        and "tts" not in name.lower()
-                        and "image" not in name.lower()
+                        and low.startswith("gemini-3")
+                        and "flash" in low
+                        and not any(bad in low for bad in EXCLUDED_FALLBACK_SUBSTRINGS)
                         and name != self.model
                     ):
                         found.append(name)
         except Exception:
             pass
-        # Prefer newer/lite flash variants first, cap at 3 fallbacks
-        found.sort(reverse=True)
-        self._discovered_fallbacks = found[:3]
+        # Prefer flash-lite first (500 RPD on free tier), then newest 3.x flash
+        found.sort(key=lambda n: (0 if "lite" in n.lower() else 1, n), reverse=False)
+        self._discovered_fallbacks = found[:4]
         return self._discovered_fallbacks
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
